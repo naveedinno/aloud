@@ -1,0 +1,23 @@
+{
+  "name": "kokoro-reader",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "build:macos-app": "npm run build && bash scripts/build-macos-app.sh",
+    "build:macos-dmg": "npm run build:macos-app && bash scripts/build-macos-dmg.sh",
+    "dev": "npm run build && node dist/cli.js",
+    "install:macos-service": "npm run build && bash scripts/install-macos-service.sh",
+    "setup:kokoro": "bash scripts/setup-kokoro.sh",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
