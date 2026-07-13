@@ -32,6 +32,9 @@ Then open `http://localhost:7878/`.
 
 The reader page and menu-bar helper share one local playback session. Voice, speed, playback mode, pause/resume, Stop, and exact chunk progress stay in sync across both surfaces. The page also includes:
 
+- a document-first reading view that follows the exact active source chunk without estimating word timing
+- local plain-text and Markdown file opening, including drag and drop
+- an undoable Clear action so an accidental click does not discard the current draft
 - compact voice selection with a preview
 - Auto, Fast Start, and Smooth Playback modes
 - previous, replay, and next chunk controls

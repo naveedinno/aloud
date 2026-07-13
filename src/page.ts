@@ -264,33 +264,6 @@ export function renderPage(): string {
       border-color: var(--line-strong);
       color: var(--text);
     }
-    .now-reading {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 12px;
-      align-items: start;
-      padding: 13px 16px;
-      border-bottom: 1px solid var(--line);
-      background: var(--soft-2);
-    }
-    .now-reading[hidden] { display: none; }
-    .now-label {
-      margin-top: 2px;
-      color: var(--soft-strong);
-      font-size: 10px;
-      font-weight: 850;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .chunk-text {
-      margin: 0;
-      color: var(--text);
-      font: 450 15px/1.55 "Kokoro Atkinson", ui-sans-serif, system-ui, sans-serif;
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 3;
-      overflow: hidden;
-    }
     .editor-head {
       display: flex;
       align-items: center;
@@ -432,13 +405,12 @@ export function renderPage(): string {
       .editor-head { align-items: flex-start; padding: 12px 13px 9px; }
       .editor-actions { gap: 6px; }
       textarea { width: calc(100% - 26px); min-height: 330px; margin: 0 13px 13px; padding: 17px; font-size: 17px; }
-      .now-reading { grid-template-columns: 1fr; gap: 5px; padding: 12px 13px; }
       .health-grid { grid-template-columns: 1fr; }
       .shortcut-row, .privacy-row { align-items: flex-start; flex-direction: column; }
       .shortcut-row select { width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+      *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; }
     }
 
     /* Listening desk */
@@ -453,6 +425,7 @@ export function renderPage(): string {
       --mint: #85d7c9;
       --mint-bright: #a1e8dd;
       --amber: #e7c483;
+      --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
     }
     html { background: var(--canvas); }
     body {
@@ -515,6 +488,7 @@ export function renderPage(): string {
       border: 1px solid var(--edge);
       border-radius: 16px;
       background: #111414;
+      transition: border-color 220ms var(--ease-ui), box-shadow 220ms var(--ease-ui);
     }
     .document-toolbar {
       display: flex;
@@ -530,7 +504,7 @@ export function renderPage(): string {
     .document-title h2 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; }
     .editor-meta { overflow: hidden; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
     .editor-actions { display: flex; gap: 6px; }
-    .document-body { position: relative; }
+    .document-body { position: relative; overflow: hidden; }
     textarea {
       display: block;
       width: 100%;
@@ -545,9 +519,66 @@ export function renderPage(): string {
       box-shadow: none;
       font: 430 clamp(19px, 1.45vw, 23px)/1.78 "Kokoro Atkinson", ui-sans-serif, system-ui, sans-serif;
       letter-spacing: 0.003em;
+      transition: opacity 180ms var(--ease-ui), box-shadow 180ms var(--ease-ui);
     }
     textarea::placeholder { color: #6f7775; }
     textarea:focus { outline: 0; box-shadow: inset 3px 0 0 var(--mint); }
+    textarea[hidden] { display: none; }
+    .reading-view {
+      display: block;
+      width: 100%;
+      height: calc(100vh - 224px);
+      min-height: 460px;
+      overflow: auto;
+      padding: clamp(30px, 4vw, 64px) clamp(28px, 6vw, 86px) 90px;
+      color: #909a97;
+      background: #111414;
+      font: 430 clamp(19px, 1.45vw, 23px)/1.78 "Kokoro Atkinson", ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.003em;
+      overflow-wrap: anywhere;
+      scrollbar-color: #39413f transparent;
+      white-space: pre-wrap;
+      animation: reading-surface-in 220ms var(--ease-ui) both;
+    }
+    .reading-view[hidden] { display: none; }
+    .active-chunk-segment {
+      margin: 0 -0.22em;
+      border-radius: 5px;
+      padding: 0.08em 0.22em 0.12em;
+      color: #f3f5f1;
+      background: #203a35;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      box-shadow: -3px 0 0 var(--mint);
+      animation: chunk-focus-in 360ms var(--ease-ui) both;
+    }
+    .reading-view.is-paused .active-chunk-segment {
+      color: #e2e6e2;
+      background: #263532;
+      box-shadow: -3px 0 0 #6d928b;
+    }
+    .document-panel.is-reading { border-color: #38514d; box-shadow: 0 16px 46px rgba(0, 0, 0, 0.22); }
+    .document-panel.is-dragging { border-color: var(--mint); box-shadow: 0 0 0 3px rgba(133, 215, 201, 0.11), 0 16px 46px rgba(0, 0, 0, 0.22); }
+    .drop-prompt {
+      position: absolute;
+      z-index: 2;
+      inset: 12px;
+      display: grid;
+      place-content: center;
+      gap: 5px;
+      border: 1px dashed #5e9e94;
+      border-radius: 11px;
+      color: var(--ink);
+      background: rgba(20, 35, 32, 0.96);
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      transform: scale(0.99);
+      transition: opacity 160ms var(--ease-ui), transform 160ms var(--ease-ui);
+    }
+    .drop-prompt strong { font-size: 14px; }
+    .drop-prompt span { color: var(--muted); font-size: 11px; }
+    .document-panel.is-dragging .drop-prompt { opacity: 1; transform: scale(1); }
 
     .control-rail {
       position: sticky;
@@ -561,6 +592,7 @@ export function renderPage(): string {
       border-radius: 14px;
       background: var(--surface);
       box-shadow: none;
+      transition: border-color 220ms var(--ease-ui), background-color 220ms var(--ease-ui);
     }
     .control-card { padding: 18px; }
     .control-heading { margin-bottom: 18px; }
@@ -603,6 +635,9 @@ export function renderPage(): string {
       font-weight: 700;
     }
     details summary:hover { background: #171b1b; }
+    details summary > span:last-child { transition: transform 240ms var(--ease-ui); }
+    details[open] summary > span:last-child { transform: rotate(180deg); }
+    details[open] .details-body { animation: details-reveal 220ms var(--ease-ui) both; }
     .summary-copy { gap: 8px; }
     .summary-badge { color: var(--muted); background: #202424; font-size: 9px; }
     .details-body { padding: 0 14px 14px; border-top-color: var(--edge); }
@@ -634,21 +669,8 @@ export function renderPage(): string {
       border-radius: 15px;
       background: rgba(20, 23, 23, 0.97);
       box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+      transition: border-color 240ms var(--ease-ui), box-shadow 240ms var(--ease-ui), background-color 240ms var(--ease-ui);
     }
-    .now-reading {
-      grid-column: 1 / -1;
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 12px;
-      align-items: center;
-      margin: -2px -2px 0;
-      padding: 9px 12px;
-      border: 1px solid #30413e;
-      border-radius: 10px;
-      background: #17211f;
-    }
-    .now-label { color: var(--mint); font-size: 9px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; }
-    .chunk-text { overflow: hidden; margin: 0; color: #d8dedc; font: 450 13px/1.45 "Kokoro Atkinson", ui-sans-serif, system-ui, sans-serif; white-space: nowrap; text-overflow: ellipsis; }
     .transport-actions { display: flex; gap: 7px; }
     .primary-button {
       min-width: 126px;
@@ -661,16 +683,48 @@ export function renderPage(): string {
       font-size: 13px;
       font-weight: 800;
     }
-    .primary-button:hover { background: var(--mint-bright); transform: none; box-shadow: none; }
+    .primary-button:hover { background: var(--mint-bright); transform: translateY(-1px); box-shadow: 0 7px 18px rgba(89, 189, 173, 0.14); }
     .stop-button { height: 46px; border-radius: 10px; padding: 0 14px; }
     .transport-status { min-width: 0; }
     .status-line { margin-bottom: 7px; color: var(--muted); font-size: 11px; }
     .status-message { overflow: hidden; color: #d6dcda; white-space: nowrap; text-overflow: ellipsis; }
+    .status-message.is-changing { animation: status-shift 220ms var(--ease-ui) both; }
     .status-message.error { color: #efaaaa; }
     .progress-track { height: 4px; background: #29302f; }
-    .progress-bar { background: var(--mint); }
+    .progress-bar { background: var(--mint); transition: none; }
+    .player-shell.is-running .progress-bar { transition: width 420ms var(--ease-ui); }
     .chunk-actions { display: flex; gap: 6px; }
+    .chunk-actions[hidden] { display: none; }
     .icon-button { width: 38px; height: 38px; border-radius: 9px; font-size: 17px; }
+    .key-hint {
+      margin-left: 9px;
+      color: rgba(16, 32, 29, 0.62);
+      font: 750 10px/1 "Kokoro Manrope", ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.04em;
+    }
+    button, select, summary {
+      transition: color 180ms var(--ease-ui), background-color 180ms var(--ease-ui), border-color 180ms var(--ease-ui), box-shadow 180ms var(--ease-ui), transform 180ms var(--ease-ui), opacity 180ms var(--ease-ui);
+    }
+    button:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+    .connection-dot, .health-dot { transition: background-color 220ms var(--ease-ui), box-shadow 220ms var(--ease-ui), transform 220ms var(--ease-ui); }
+    .connection.is-busy .connection-dot { transform: scale(1.16); }
+
+    @keyframes reading-surface-in {
+      from { opacity: 0.72; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes chunk-focus-in {
+      from { color: #c8cfcc; background: #17211f; box-shadow: -3px 0 0 rgba(133, 215, 201, 0.18); }
+      to { color: #f3f5f1; background: #203a35; box-shadow: -3px 0 0 var(--mint); }
+    }
+    @keyframes status-shift {
+      from { opacity: 0.3; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes details-reveal {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
 
     @media (max-width: 940px) {
       .app-shell { width: min(100% - 28px, 760px); padding-top: 18px; }
@@ -678,6 +732,7 @@ export function renderPage(): string {
       .control-rail { position: static; grid-template-columns: 1fr 1fr; }
       .control-card { grid-row: span 2; }
       textarea { min-height: 62vh; }
+      .reading-view { height: 62vh; min-height: 460px; }
     }
     @media (max-width: 620px) {
       .app-shell { width: 100%; padding: 14px 10px 16px; }
@@ -688,19 +743,21 @@ export function renderPage(): string {
       .connection { padding: 7px 9px; }
       .document-panel { border-radius: 13px; }
       .document-toolbar { min-height: 54px; gap: 10px; padding: 0 12px; }
-      .document-title { display: block; }
+      .document-title { display: block; max-width: 130px; }
       .document-title h2 { font-size: 11px; }
-      .editor-meta { max-width: 180px; margin-top: 2px; font-size: 10px; }
-      textarea { min-height: 56vh; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
-      .control-rail { grid-template-columns: 1fr; }
+      .editor-meta { max-width: 130px; margin-top: 2px; font-size: 10px; }
+      .editor-actions { flex-wrap: wrap; justify-content: flex-end; }
+      .connection span:last-child { display: inline; }
+      textarea { min-height: 48vh; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
+      .reading-view { height: 48vh; min-height: 0; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
+      .control-rail { grid-template-columns: 1fr; padding-bottom: 112px; }
       .control-card { grid-row: auto; }
       .player-shell { grid-template-columns: 1fr auto; gap: 10px; bottom: 8px; margin-top: 10px; border-radius: 13px; padding: 9px; }
       .transport-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
       .primary-button { width: 100%; }
-      .transport-status { grid-column: 1 / -1; grid-row: 2; }
-      .chunk-actions { grid-column: 1 / -1; justify-content: flex-end; }
-      .now-reading { grid-template-columns: 1fr; gap: 3px; }
-      .chunk-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+      .transport-status { grid-column: 1; grid-row: 2; }
+      .chunk-actions { grid-column: 2; grid-row: 2; justify-content: flex-end; }
+      .key-hint { display: none; }
     }
   </style>
 </head>
@@ -728,13 +785,17 @@ export function renderPage(): string {
             <div class="editor-meta" data-count>0 words · 0 paragraphs · 0 characters</div>
           </div>
           <div class="editor-actions">
+            <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" data-file-input hidden>
+            <button class="utility-button" type="button" data-open>Open</button>
             <button class="utility-button" type="button" data-paste>Paste</button>
             <button class="utility-button" type="button" data-clear>Clear</button>
           </div>
         </div>
         <div class="document-body">
+          <div class="drop-prompt" data-drop-prompt aria-hidden="true"><strong>Drop a text file here</strong><span>.txt, .md, or plain text</span></div>
           <label class="sr-only" for="reader-text">Text to read</label>
           <textarea id="reader-text" data-text placeholder="Paste or type something worth listening to…" spellcheck="true"></textarea>
+          <div class="reading-view" data-reading-view role="document" aria-label="Text being read" tabindex="0" hidden></div>
         </div>
       </section>
 
@@ -811,12 +872,8 @@ export function renderPage(): string {
     </div>
 
     <section class="player-shell" aria-label="Playback">
-      <div class="now-reading" data-now-reading hidden>
-        <span class="now-label">Listening now</span>
-        <p class="chunk-text" data-chunk-text></p>
-      </div>
       <div class="transport-actions">
-        <button class="primary-button" type="button" data-play aria-keyshortcuts="Control+Enter Meta+Enter">Read aloud</button>
+        <button class="primary-button" type="button" data-play aria-keyshortcuts="Control+Enter Meta+Enter"><span data-play-label>Read aloud</span><span class="key-hint" aria-hidden="true">⌘ ↵</span></button>
         <button class="stop-button" type="button" data-stop disabled>Stop</button>
       </div>
       <div class="transport-status">
@@ -828,7 +885,7 @@ export function renderPage(): string {
           <div class="progress-bar" data-progress></div>
         </div>
       </div>
-      <div class="chunk-actions" aria-label="Chunk navigation">
+      <div class="chunk-actions" aria-label="Chunk navigation" data-chunk-actions hidden>
         <button class="icon-button" type="button" data-seek="previous" aria-label="Previous chunk" title="Previous chunk" disabled>‹</button>
         <button class="icon-button" type="button" data-seek="replay" aria-label="Replay chunk" title="Replay chunk" disabled>↺</button>
         <button class="icon-button" type="button" data-seek="next" aria-label="Next chunk" title="Next chunk" disabled>›</button>
@@ -842,6 +899,7 @@ export function renderPage(): string {
     var count = document.querySelector('[data-count]');
     var status = document.querySelector('[data-status]');
     var play = document.querySelector('[data-play]');
+    var playLabel = document.querySelector('[data-play-label]');
     var stop = document.querySelector('[data-stop]');
     var voice = document.querySelector('[data-voice]');
     var mode = document.querySelector('[data-mode]');
@@ -852,14 +910,26 @@ export function renderPage(): string {
     var progress = document.querySelector('[data-progress]');
     var progressTrack = document.querySelector('[data-progress-track]');
     var progressLabel = document.querySelector('[data-progress-label]');
-    var nowReading = document.querySelector('[data-now-reading]');
-    var chunkText = document.querySelector('[data-chunk-text]');
+    var playerShell = document.querySelector('.player-shell');
+    var documentPanel = document.querySelector('.document-panel');
+    var readingView = document.querySelector('[data-reading-view]');
+    var openButton = document.querySelector('[data-open]');
+    var fileInput = document.querySelector('[data-file-input]');
+    var pasteButton = document.querySelector('[data-paste]');
+    var clearButton = document.querySelector('[data-clear]');
+    var chunkActions = document.querySelector('[data-chunk-actions]');
     var historyEnabled = document.querySelector('[data-history-enabled]');
     var recentList = document.querySelector('[data-recent-list]');
     var currentStatus = null;
     var requestBusy = false;
     var statusTimer = null;
     var healthTimer = null;
+    var activeChunkKey = '';
+    var dragDepth = 0;
+    var lastClearedText = '';
+    var clearUndoTimer = null;
+    var localStatusUntil = 0;
+    var playbackEndedAt = 0;
     var TEXT_KEY = 'kokoro-reader-text';
     var HISTORY_KEY = 'kokoro-reader-history';
     var HISTORY_ENABLED_KEY = 'kokoro-reader-history-enabled';
@@ -884,9 +954,129 @@ export function renderPage(): string {
       return requestJson(path, { method: 'POST', body: body });
     }
 
-    function setStatus(message, error){
-      status.textContent = message || 'Ready to read.';
+    function setStatus(message, error, force){
+      if(!force && Date.now() < localStatusUntil) return;
+      var nextMessage = message || 'Ready to read.';
+      if(status.textContent !== nextMessage){
+        status.classList.remove('is-changing');
+        status.textContent = nextMessage;
+        void status.offsetWidth;
+        status.classList.add('is-changing');
+      }
       status.classList.toggle('is-error', !!error);
+    }
+
+    function setLocalStatus(message, error, duration){
+      localStatusUntil = Date.now() + (duration || 2800);
+      setStatus(message, error, true);
+    }
+
+    function resetClearUndo(){
+      if(clearUndoTimer) clearTimeout(clearUndoTimer);
+      clearUndoTimer = null;
+      lastClearedText = '';
+      clearButton.textContent = 'Clear';
+      clearButton.removeAttribute('data-undo-clear');
+    }
+
+    function setEditorText(value, message){
+      resetClearUndo();
+      text.value = value || '';
+      localStorage.setItem(TEXT_KEY, text.value);
+      updateCounts();
+      text.focus();
+      if(message) setLocalStatus(message);
+    }
+
+    function readLocalTextFile(file){
+      if(!file) return Promise.resolve();
+      var name = String(file.name || 'text file');
+      var supportedName = /\.(txt|md|markdown)$/i.test(name);
+      var supportedType = !file.type || /^text\//i.test(file.type);
+      if(!supportedName && !supportedType){
+        setLocalStatus('Choose a plain text or Markdown file.', true);
+        return Promise.resolve();
+      }
+      if(file.size > 2 * 1024 * 1024){
+        setLocalStatus('That file is larger than 2 MB. Choose a smaller text file.', true);
+        return Promise.resolve();
+      }
+      return file.text().then(function(value){
+        setEditorText(value, 'Opened ' + name + '.');
+      }).catch(function(){
+        setLocalStatus('Could not read that local file.', true);
+      }).finally(function(){
+        fileInput.value = '';
+      });
+    }
+
+    function comparableSpeechText(value){
+      return String(value || '').trim().replace(/\s+/g, ' ');
+    }
+
+    function hideReadingHighlight(){
+      if(readingView.hidden) return;
+      text.scrollTop = readingView.scrollTop;
+      readingView.hidden = true;
+      readingView.textContent = '';
+      text.hidden = false;
+      text.removeAttribute('aria-hidden');
+      documentPanel.classList.remove('is-reading');
+      activeChunkKey = '';
+    }
+
+    function renderReadingHighlight(next, state, exactChunk){
+      var source = text.value || '';
+      var start = Number(state.chunkStart);
+      var end = Number(state.chunkEnd);
+      var validRange = Number.isInteger(start)
+        && Number.isInteger(end)
+        && start >= 0
+        && end > start
+        && end <= source.length
+        && comparableSpeechText(source.slice(start, end)) === comparableSpeechText(exactChunk);
+      if(!next.running || !exactChunk || !validRange){
+        hideReadingHighlight();
+        return;
+      }
+
+      readingView.classList.toggle('is-paused', !!next.paused);
+      var key = String(start) + ':' + String(end);
+      if(!readingView.hidden && activeChunkKey === key) return;
+
+      var previousScroll = readingView.hidden ? text.scrollTop : readingView.scrollTop;
+      var active = document.createElement('span');
+      active.className = 'active-chunk';
+      active.setAttribute('data-active-chunk', '');
+      active.setAttribute('aria-current', 'true');
+      source.slice(start, end).split(/(\n+)/).forEach(function(part){
+        if(!part) return;
+        if(/^\n+$/.test(part)){
+          active.appendChild(document.createTextNode(part));
+          return;
+        }
+        var segment = document.createElement('mark');
+        segment.className = 'active-chunk-segment';
+        segment.appendChild(document.createTextNode(part));
+        active.appendChild(segment);
+      });
+      readingView.replaceChildren(
+        document.createTextNode(source.slice(0, start)),
+        active,
+        document.createTextNode(source.slice(end)),
+      );
+      readingView.hidden = false;
+      readingView.scrollTop = previousScroll;
+      text.hidden = true;
+      text.setAttribute('aria-hidden', 'true');
+      documentPanel.classList.add('is-reading');
+      activeChunkKey = key;
+
+      requestAnimationFrame(function(){
+        var target = Math.max(0, active.offsetTop - Math.max(24, (readingView.clientHeight - active.offsetHeight) / 2));
+        var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        readingView.scrollTo({ top: target, behavior: reduced ? 'auto' : 'smooth' });
+      });
     }
 
     function updateCounts(){
@@ -895,6 +1085,7 @@ export function renderPage(): string {
       var paragraphs = value.trim() ? value.trim().split(/\n\s*\n+/).length : 0;
       count.textContent = String(words) + (words === 1 ? ' word' : ' words') + ' · ' + String(paragraphs) + (paragraphs === 1 ? ' paragraph' : ' paragraphs') + ' · ' + String(value.length) + (value.length === 1 ? ' character' : ' characters');
       if(!currentStatus || !currentStatus.running) play.disabled = !value.trim() || requestBusy;
+      clearButton.disabled = requestBusy || !!(currentStatus && currentStatus.running) || (!value && !lastClearedText);
     }
 
     function selectedDescription(select){
@@ -920,6 +1111,7 @@ export function renderPage(): string {
       currentStatus = next;
       connection.classList.remove('is-ready', 'is-busy', 'is-error');
       connection.classList.add(next.running ? 'is-busy' : 'is-ready');
+      playerShell.classList.toggle('is-running', !!next.running);
       connectionLabel.textContent = next.running ? (next.paused ? 'Paused' : 'Reading') : 'Local · Ready';
       connection.setAttribute('aria-label', 'Reader status: ' + connectionLabel.textContent);
       voice.value = next.voice || 'af_heart';
@@ -932,32 +1124,46 @@ export function renderPage(): string {
       });
 
       var state = next.state || {};
-      // A daemon can retain its last error after it has gone idle. Do not leave
-      // an old failure pinned beside a ready reader, but keep active failures
-      // visible long enough to explain what just happened.
-      var staleIdleError = state.status === 'error' && !next.running && !wasRunning;
-      setStatus(
-        staleIdleError ? 'Ready to read.' : (next.paused ? 'Paused.' : state.message || (next.running ? 'Reading…' : 'Ready to read.')),
-        state.status === 'error' && !staleIdleError,
-      );
-      play.textContent = next.running ? (next.paused ? 'Resume' : 'Pause') : 'Read aloud';
+      if(!next.running && wasRunning){
+        playbackEndedAt = Date.now();
+        setLocalStatus(state.message || 'Finished reading.', state.status === 'error', 3200);
+      } else if(next.running) {
+        playbackEndedAt = 0;
+        setStatus(
+          next.paused ? 'Paused.' : (next.running ? state.message || 'Reading…' : 'Ready to read.'),
+          next.running && state.status === 'error',
+        );
+      } else {
+        setStatus('Ready to read.', false);
+      }
+      playLabel.textContent = next.running ? (next.paused ? 'Resume' : 'Pause') : 'Read aloud';
       play.disabled = requestBusy || (!next.running && !(text.value || '').trim());
       stop.disabled = requestBusy || !next.running;
       preview.disabled = requestBusy || next.running;
+      pasteButton.disabled = requestBusy || next.running;
+      openButton.disabled = requestBusy || next.running;
+      clearButton.disabled = requestBusy || next.running || (!(text.value || '') && !lastClearedText);
       document.querySelector('[data-seek="previous"]').disabled = requestBusy || !next.canGoPrevious;
       document.querySelector('[data-seek="replay"]').disabled = requestBusy || !next.canReplay;
       document.querySelector('[data-seek="next"]').disabled = requestBusy || !next.canGoNext;
+      chunkActions.hidden = !(next.canGoPrevious || next.canReplay || next.canGoNext);
 
       var total = Number(state.total || 0);
       var current = Number(state.current || 0);
-      var percent = total > 0 ? Math.max(0, Math.min(100, Math.round((current / total) * 100))) : 0;
+      var showingCompletion = !next.running && playbackEndedAt > 0 && Date.now() - playbackEndedAt < 3200;
+      var completedChunks = next.running ? Math.max(0, current - 1) : (showingCompletion ? total : 0);
+      var percent = total > 0 ? Math.max(0, Math.min(100, Math.round((completedChunks / total) * 100))) : 0;
       progress.style.width = String(percent) + '%';
       progressTrack.setAttribute('aria-valuenow', String(percent));
-      progressLabel.textContent = total > 1 ? String(Math.max(1, current)) + ' / ' + String(total) : (next.running ? next.voiceLabel + ' · ' + next.rate + '×' : '—');
+      progressTrack.setAttribute('aria-valuetext', next.running && total > 0
+        ? 'Reading chunk ' + String(Math.max(1, current)) + ' of ' + String(total)
+        : (showingCompletion ? 'Reading complete' : 'Ready'));
+      progressLabel.textContent = next.running || showingCompletion
+        ? (total > 1 ? String(Math.max(1, current)) + ' / ' + String(total) : next.voiceLabel + ' · ' + next.rate + '×')
+        : '—';
 
       var exactChunk = String(state.chunkText || '').trim();
-      nowReading.hidden = !exactChunk || (!next.running && state.status !== 'done');
-      chunkText.textContent = exactChunk;
+      renderReadingHighlight(next, state, exactChunk);
     }
 
     function markOffline(error){
@@ -965,7 +1171,8 @@ export function renderPage(): string {
       connection.classList.add('is-error');
       connectionLabel.textContent = 'Reader unavailable';
       connection.setAttribute('aria-label', 'Reader status: unavailable');
-      setStatus(error && error.message ? error.message : 'Could not reach the local reader.', true);
+      setStatus(error && error.message ? error.message : 'Could not reach the local reader.', true, true);
+      hideReadingHighlight();
     }
 
     function refreshStatus(){
@@ -974,6 +1181,7 @@ export function renderPage(): string {
 
     function withBusy(operation){
       if(requestBusy) return Promise.resolve();
+      localStatusUntil = 0;
       requestBusy = true;
       play.disabled = true;
       preview.disabled = true;
@@ -998,7 +1206,7 @@ export function renderPage(): string {
         return withBusy(function(){ return post('/api/reader/control', { action: currentStatus.paused ? 'resume' : 'pause' }); });
       }
       var value = (text.value || '').trim();
-      if(!value){ setStatus('Paste or type some text first.', true); return; }
+      if(!value){ setLocalStatus('Paste or type some text first.', true); return; }
       saveRecent(value);
       return withBusy(function(){
         setStatus('Preparing text…');
@@ -1121,15 +1329,30 @@ export function renderPage(): string {
       var seek = target.closest('[data-seek]');
       if(seek){ withBusy(function(){ return post('/api/reader/seek', { action: seek.getAttribute('data-seek') }); }); return; }
       if(target.closest('[data-clear]')){
+        if(lastClearedText){
+          var restoredText = lastClearedText;
+          setEditorText(restoredText, 'Text restored.');
+          return;
+        }
+        if(!text.value) return;
+        lastClearedText = text.value;
         text.value = '';
         localStorage.removeItem(TEXT_KEY);
         updateCounts();
+        clearButton.textContent = 'Undo';
+        clearButton.setAttribute('data-undo-clear', '');
+        setLocalStatus('Text cleared. Undo is available for a few seconds.');
+        clearUndoTimer = setTimeout(function(){ resetClearUndo(); updateCounts(); }, 8000);
         text.focus();
         return;
       }
+      if(target.closest('[data-open]')){
+        fileInput.click();
+        return;
+      }
       if(target.closest('[data-paste]')){
-        if(!navigator.clipboard || !navigator.clipboard.readText){ setStatus('Clipboard access is unavailable in this browser.', true); return; }
-        navigator.clipboard.readText().then(function(value){ text.value = value; localStorage.setItem(TEXT_KEY, value); updateCounts(); text.focus(); }).catch(function(){ setStatus('Allow clipboard access, then try Paste again.', true); });
+        if(!navigator.clipboard || !navigator.clipboard.readText){ setLocalStatus('Clipboard access is unavailable in this browser.', true); return; }
+        navigator.clipboard.readText().then(function(value){ setEditorText(value, 'Pasted from the clipboard.'); }).catch(function(){ setLocalStatus('Allow clipboard access, then try Paste again.', true); });
         return;
       }
       var repair = target.closest('[data-repair]');
@@ -1140,7 +1363,7 @@ export function renderPage(): string {
       var restore = target.closest('[data-restore]');
       if(restore){
         var item = loadHistory()[Number(restore.getAttribute('data-restore'))];
-        if(item){ text.value = item.text; localStorage.setItem(TEXT_KEY, item.text); updateCounts(); text.focus(); }
+        if(item) setEditorText(item.text, 'Reading restored.');
         return;
       }
       if(target.closest('[data-clear-history]')){ localStorage.removeItem(HISTORY_KEY); renderHistory(); }
@@ -1150,7 +1373,30 @@ export function renderPage(): string {
     mode.addEventListener('change', function(){ updateModeDescription(); updateSettings({ mode: mode.value }); });
     shortcut.addEventListener('change', function(){ updateSettings({ shortcut: shortcut.value }); });
     historyEnabled.addEventListener('change', function(){ localStorage.setItem(HISTORY_ENABLED_KEY, historyEnabled.checked ? 'true' : 'false'); renderHistory(); });
-    text.addEventListener('input', function(){ localStorage.setItem(TEXT_KEY, text.value || ''); updateCounts(); });
+    fileInput.addEventListener('change', function(){ readLocalTextFile(fileInput.files && fileInput.files[0]); });
+    documentPanel.addEventListener('dragenter', function(event){
+      if(!event.dataTransfer || !event.dataTransfer.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
+      event.preventDefault();
+      dragDepth += 1;
+      documentPanel.classList.add('is-dragging');
+    });
+    documentPanel.addEventListener('dragover', function(event){
+      if(!event.dataTransfer || !event.dataTransfer.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+    documentPanel.addEventListener('dragleave', function(){
+      dragDepth = Math.max(0, dragDepth - 1);
+      if(!dragDepth) documentPanel.classList.remove('is-dragging');
+    });
+    documentPanel.addEventListener('drop', function(event){
+      event.preventDefault();
+      dragDepth = 0;
+      documentPanel.classList.remove('is-dragging');
+      if(currentStatus && currentStatus.running) return;
+      readLocalTextFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
+    });
+    text.addEventListener('input', function(){ resetClearUndo(); localStorage.setItem(TEXT_KEY, text.value || ''); updateCounts(); });
     document.addEventListener('keydown', function(event){
       if((event.metaKey || event.ctrlKey) && event.key === 'Enter'){
         event.preventDefault();
@@ -1171,7 +1417,7 @@ export function renderPage(): string {
     refreshHealth();
     statusTimer = setInterval(refreshStatus, 900);
     healthTimer = setInterval(refreshHealth, 6000);
-    window.addEventListener('beforeunload', function(){ clearInterval(statusTimer); clearInterval(healthTimer); });
+    window.addEventListener('beforeunload', function(){ clearInterval(statusTimer); clearInterval(healthTimer); if(clearUndoTimer) clearTimeout(clearUndoTimer); });
   })();
   </script>
 </body>

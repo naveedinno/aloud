@@ -15,11 +15,13 @@ import {
 import {
   playAudio,
   speechBatchesForMode,
+  speechChunkRanges,
   speakText,
   speechPrefetchForMode,
   speechMode,
   type SpeechMode,
   type SpeechPlaybackHandle,
+  type SpeechChunkRange,
   type SpeechResult,
 } from './speak.js';
 
@@ -37,6 +39,12 @@ export interface SpeechDaemonRequest {
   voice?: string;
 }
 
+export type SpeechDaemonState = SpeechControllerState & {
+  chunkEnd?: number;
+  chunkStart?: number;
+  chunkText?: string;
+};
+
 export interface SpeechDaemonStatus {
   accessibilityTrusted?: boolean;
   canGoNext: boolean;
@@ -50,7 +58,7 @@ export interface SpeechDaemonStatus {
   running: boolean;
   shortcut: GlobalShortcut;
   shortcutLabel: string;
-  state: SpeechControllerState & { chunkText?: string };
+  state: SpeechDaemonState;
   voice: string;
   voiceLabel: string;
 }
@@ -82,9 +90,9 @@ export async function runSpeechDaemon(): Promise<void> {
   let currentShortcut = normalizeGlobalShortcut(storedPreferences.shortcut);
   let currentStartAt = 0;
   let currentVoice = normalizeDaemonVoice(storedPreferences.voice ?? DEFAULT_READER_PREFERENCES.voice);
-  let currentState: SpeechControllerState & { chunkText?: string } = { message: 'Ready', rate: currentRate, status: 'done' };
+  let currentState: SpeechDaemonState = { message: 'Ready', rate: currentRate, status: 'done' };
 
-  const updateState = (state: Partial<SpeechControllerState & { chunkText?: string }>) => {
+  const updateState = (state: Partial<SpeechDaemonState>) => {
     currentState = { ...currentState, ...state, rate: currentRate };
   };
 
@@ -140,6 +148,7 @@ export async function runSpeechDaemon(): Promise<void> {
 
   const startJob = (input: SpeechDaemonRequest, chunks: string[], startAt = 0) => {
     const abort = new AbortController();
+    const chunkRanges = speechChunkRanges(input.text, chunks);
     currentPaused = false;
     currentRequest = input;
     currentChunks = chunks;
@@ -150,7 +159,10 @@ export async function runSpeechDaemon(): Promise<void> {
       rate: currentRate,
       voice: selectedDaemonVoice(currentVoice),
     };
+    const startRange = chunkRanges[currentStartAt];
     updateState({
+      chunkEnd: startRange?.end,
+      chunkStart: startRange?.start,
       chunkText: chunks[currentStartAt] ?? input.text,
       current: currentStartAt,
       message: chunks.length > 1 ? `Preparing chunk ${currentStartAt + 1} of ${chunks.length}` : 'Preparing selected text',
@@ -162,6 +174,7 @@ export async function runSpeechDaemon(): Promise<void> {
       home,
       jobInput,
       chunks,
+      chunkRanges,
       currentStartAt,
       abort,
       synthesize,
@@ -314,11 +327,12 @@ async function speakDaemonJob(
   home: string,
   input: SpeechDaemonRequest,
   batches: string[],
+  chunkRanges: Array<SpeechChunkRange | undefined>,
   startAt: number,
   abort: AbortController,
   synthesize: Parameters<typeof speakText>[0]['synthesize'],
   rate: () => number,
-  updateState: (state: Partial<SpeechControllerState & { chunkText?: string }>) => void,
+  updateState: (state: Partial<SpeechDaemonState>) => void,
   onPlaybackHandle: (handle: SpeechPlaybackHandle | undefined) => void,
 ): Promise<void> {
   try {
@@ -328,7 +342,15 @@ async function speakDaemonJob(
       home,
       mode: input.mode,
       onPlaybackHandle,
-      onProgress: (progress) => updateState(progress),
+      onProgress: (progress) => {
+        const range = chunkRanges[progress.index];
+        const { index: _index, ...state } = progress;
+        updateState({
+          ...state,
+          chunkEnd: range?.end,
+          chunkStart: range?.start,
+        });
+      },
       player: playAudio,
       playbackRate: rate,
       prefetch: input.prefetch ?? speechPrefetchForMode(input.mode),

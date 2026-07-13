@@ -49,9 +49,15 @@ export const SMOOTH_SPEECH_BATCH_CHARS = 900;
 export interface SpeechProgress {
   chunkText: string;
   current: number;
+  index: number;
   message: string;
   status: SpeechProgressStatus;
   total: number;
+}
+
+export interface SpeechChunkRange {
+  end: number;
+  start: number;
 }
 
 export interface SpeakTextOptions {
@@ -209,6 +215,43 @@ export function speechPrefetchForMode(mode?: SpeechMode): number {
   return speechMode(mode) === 'smooth' ? 6 : 3;
 }
 
+export function speechChunkRanges(text: string, chunks: string[]): Array<SpeechChunkRange | undefined> {
+  const source = mappedSpeechText(text);
+  let cursor = 0;
+  return chunks.map((chunk) => {
+    const needle = mappedSpeechText(chunk).text;
+    if (!needle) return undefined;
+    const offset = source.text.indexOf(needle, cursor);
+    if (offset < 0) return undefined;
+    cursor = offset + needle.length;
+    return {
+      start: source.map[offset],
+      end: source.map[offset + needle.length - 1] + 1,
+    };
+  });
+}
+
+function mappedSpeechText(value: string): { map: number[]; text: string } {
+  const chars: string[] = [];
+  const map: number[] = [];
+  let pendingWhitespace = -1;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (/\s/.test(char)) {
+      if (chars.length > 0 && pendingWhitespace < 0) pendingWhitespace = index;
+      continue;
+    }
+    if (pendingWhitespace >= 0) {
+      chars.push(' ');
+      map.push(pendingWhitespace);
+      pendingWhitespace = -1;
+    }
+    chars.push(char);
+    map.push(index);
+  }
+  return { map, text: chars.join('') };
+}
+
 async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text' | 'synthesize' | 'player'>> & SpeakTextOptions): Promise<SpeechResult> {
   const home = options.home ?? homedir();
   const batches = options.batches?.map((batch) => String(batch).trim()).filter(Boolean)
@@ -219,6 +262,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
   options.onProgress?.({
     chunkText: batches[startAt],
     current: startAt,
+    index: startAt,
     message: batches.length === 1 ? 'Generating selected text' : `Generating chunk ${startAt + 1} of ${batches.length}`,
     status: 'generating',
     total: batches.length,
@@ -257,6 +301,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
     options.onProgress?.({
       chunkText: batches[i],
       current: i + 1,
+      index: i,
       message: batches.length === 1 ? 'Reading selected text' : `Reading chunk ${i + 1} of ${batches.length}`,
       status: 'reading',
       total: batches.length,
@@ -271,6 +316,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
       options.onProgress?.({
         chunkText: batches[i + 1],
         current: i + 1,
+        index: i + 1,
         message: `Preparing chunk ${i + 2} of ${batches.length}`,
         status: 'generating',
         total: batches.length,
@@ -285,6 +331,7 @@ async function speakFullText(options: Required<Pick<SpeakTextOptions, 'text' | '
   options.onProgress?.({
     chunkText: options.text,
     current: 0,
+    index: 0,
     message: 'Generating full text',
     status: 'generating',
     total: 1,
@@ -298,6 +345,7 @@ async function speakFullText(options: Required<Pick<SpeakTextOptions, 'text' | '
   options.onProgress?.({
     chunkText: options.text,
     current: 1,
+    index: 0,
     message: 'Reading full text',
     status: 'reading',
     total: 1,

@@ -27,6 +27,9 @@ test('speech daemon tracks menu bar voice selection for plain reads', () => {
   assert.match(source, /request\.url === '\/settings'/);
   assert.match(source, /request\.url === '\/seek'/);
   assert.match(source, /chunkText:/);
+  assert.match(source, /speechChunkRanges\(input\.text, chunks\)/);
+  assert.match(source, /chunkStart: range\?\.start/);
+  assert.match(source, /chunkEnd: range\?\.end/);
   assert.match(source, /speechPrefetchForMode\(input\.mode\)/);
   assert.match(source, /normalizeGlobalShortcut/);
   assert.match(source, /saveReaderPreferences/);

@@ -7,6 +7,7 @@ import {
   audioPlayerCommand,
   parseSpeakArgs,
   speechBatchesForMode,
+  speechChunkRanges,
   splitTextIntoSpeechBatches,
   speakText,
 } from '../dist/speak.js';
@@ -256,6 +257,18 @@ test('splitTextIntoSpeechBatches prefers clause boundaries for long sentences', 
   ]);
 });
 
+test('speechChunkRanges maps exact sequential chunks back to the source text', () => {
+  const source = 'Repeat this.\n\nRepeat this.  Then finish here.';
+  assert.deepEqual(
+    speechChunkRanges(source, ['Repeat this.', 'Repeat this.', 'Then finish here.']),
+    [
+      { start: 0, end: 12 },
+      { start: 14, end: 26 },
+      { start: 28, end: 45 },
+    ],
+  );
+});
+
 test('speakText rejects empty selected text before synthesis', async () => {
   await assert.rejects(
     () => speakText({
@@ -357,6 +370,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       {
         chunkText: first,
         current: 0,
+        index: 0,
         message: 'Generating chunk 1 of 2',
         status: 'generating',
         total: 2,
@@ -364,6 +378,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       {
         chunkText: first,
         current: 1,
+        index: 0,
         message: 'Reading chunk 1 of 2',
         status: 'reading',
         total: 2,
@@ -371,6 +386,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       {
         chunkText: second,
         current: 1,
+        index: 1,
         message: 'Preparing chunk 2 of 2',
         status: 'generating',
         total: 2,
@@ -378,6 +394,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       {
         chunkText: second,
         current: 2,
+        index: 1,
         message: 'Reading chunk 2 of 2',
         status: 'reading',
         total: 2,
