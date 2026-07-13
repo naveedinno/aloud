@@ -28,6 +28,7 @@ test('native menu bar helper exposes the expected controls', () => {
   assert.match(source, /Pause Reading/);
   assert.match(source, /Resume Reading/);
   assert.match(source, /Read Selection/);
+  assert.match(source, /currentShortcutLabel/);
   assert.match(source, /Read Clipboard/);
   assert.match(source, /Reader/);
   assert.match(source, /Random/);
@@ -46,7 +47,7 @@ test('native menu bar helper exposes the expected controls', () => {
   assert.match(source, /Quit Menu Bar/);
 });
 
-test('native menu bar helper talks to the warm daemon', () => {
+test('native menu bar helper talks to the lightweight daemon', () => {
   const source = nativeMenuBarSource();
   assert.match(source, /http:\/\/127\.0\.0\.1:17878/);
   assert.match(source, /request\(path: "status", method: "GET"/);
@@ -56,15 +57,21 @@ test('native menu bar helper talks to the warm daemon', () => {
   assert.match(source, /request\(path: "mode", method: "POST"/);
   assert.match(source, /request\(path: "rate", method: "POST"/);
   assert.match(source, /request\(path: "voice", method: "POST"/);
+  assert.match(source, /request\(path: "accessibility", method: "POST"/);
 });
 
 test('native menu bar helper registers a global read-selection hotkey', () => {
   const source = nativeMenuBarSource();
   assert.match(source, /import Carbon\.HIToolbox/);
   assert.match(source, /RegisterEventHotKey/);
+  assert.match(source, /UnregisterEventHotKey/);
   assert.match(source, /kVK_ANSI_R/);
   assert.match(source, /optionKey/);
   assert.match(source, /handleGlobalHotKey/);
+  assert.match(source, /shortcutDefinition/);
+  assert.match(source, /option\+space/);
+  assert.match(source, /control\+option\+r/);
+  assert.match(source, /command\+shift\+r/);
   assert.match(source, /readSelection/);
   assert.match(source, /captureClipboard/);
   assert.match(source, /restoreClipboard/);

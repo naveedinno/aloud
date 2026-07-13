@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   audioPlayerCommand,
   parseSpeakArgs,
+  speechBatchesForMode,
   splitTextIntoSpeechBatches,
   speakText,
 } from '../dist/speak.js';
@@ -26,7 +27,7 @@ test('speak args default to stdin with browser disabled', () => {
     text: '',
     voice: 'af_heart',
     voiceExplicit: false,
-    workers: 3,
+    workers: 1,
   });
 });
 
@@ -46,7 +47,7 @@ test('speak args accept selected text options', () => {
     text: 'Read me',
     voice: 'daniel',
     voiceExplicit: true,
-    workers: 3,
+    workers: 1,
   });
 });
 
@@ -59,7 +60,7 @@ test('speak args accept the macOS controller flag and legacy popup alias', () =>
   assert.equal(parseSpeakArgs(['speak', '--popup', 'Read me']).controller, true);
 });
 
-test('speak args accept the warm daemon flag', () => {
+test('speak args accept the local daemon flag', () => {
   assert.equal(parseSpeakArgs(['speak', '--daemon', 'Read me']).daemon, true);
 });
 
@@ -113,17 +114,15 @@ test('speakText auto mode keeps short text in fast-start batches', async () => {
       },
     });
     assert.deepEqual(events, [
-      'synth:One.',
-      'synth:Two.',
-      'play:One..wav',
-      'play:Two..wav',
+      'synth:One. Two.',
+      'play:One. Two..wav',
     ]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('speakText auto mode uses full-text playback for long text', async () => {
+test('speakText auto mode streams long text in adaptive batches', async () => {
   const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-auto-long-home-'));
   const text = `${'Long sentence. '.repeat(80)}Done.`;
   const events = [];
@@ -138,7 +137,7 @@ test('speakText auto mode uses full-text playback for long text', async () => {
           cached: false,
           dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
-          path: join(home, 'full.wav'),
+          path: join(home, `${events.length}.wav`),
           voice: 'af_heart',
           langCode: 'a',
           rate: 1,
@@ -149,23 +148,38 @@ test('speakText auto mode uses full-text playback for long text', async () => {
         events.push(`play:${path.split('/').pop()}`);
       },
     });
-    assert.deepEqual(events, [
-      `synth:${text}`,
-      'play:full.wav',
-    ]);
+    const synthesized = events.filter((event) => event.startsWith('synth:')).map((event) => event.slice(6));
+    const played = events.filter((event) => event.startsWith('play:'));
+    assert.ok(synthesized.length > 1);
+    assert.ok(synthesized[0].length <= 260);
+    assert.ok(synthesized.slice(1).every((batch) => batch.length <= 650));
+    assert.equal(synthesized.join(' '), text);
+    assert.equal(played.length, synthesized.length);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('speakText smooth mode generates one full-text audio before playback', async () => {
+test('fast-start mode uses a smaller opening chunk than auto mode', () => {
+  const text = `${'A useful sentence with enough detail to group naturally. '.repeat(20)}Done.`;
+  const automatic = speechBatchesForMode(text, 'auto');
+  const fast = speechBatchesForMode(text, 'fast-start');
+  assert.ok(automatic.length > 1);
+  assert.ok(fast.length > 1);
+  assert.ok(fast[0].length <= 170);
+  assert.ok(automatic[0].length > fast[0].length);
+  assert.equal(fast.join(' '), text);
+});
+
+test('smooth mode batches long selections instead of sending an unbounded Kokoro request', async () => {
   const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-smooth-home-'));
   const events = [];
+  const text = Array.from({ length: 16 }, (_, index) => `Sentence ${index + 1} ${'detail '.repeat(10)}.`).join(' ');
   try {
     await speakText({
       home,
       mode: 'smooth',
-      text: 'One. Two. Three.',
+      text,
       synthesize: async (_actualHome, input) => {
         events.push(`synth:${input.text}`);
         return {
@@ -180,14 +194,15 @@ test('speakText smooth mode generates one full-text audio before playback', asyn
         };
       },
       player: async (path) => {
-        assert.equal(path, join(home, 'One. Two. Three..wav'));
         events.push(`play:${path.split('/').pop()}`);
       },
     });
-    assert.deepEqual(events, [
-      'synth:One. Two. Three.',
-      'play:One. Two. Three..wav',
-    ]);
+    const synthesized = events.filter((event) => event.startsWith('synth:')).map((event) => event.slice(6));
+    const played = events.filter((event) => event.startsWith('play:'));
+    assert.ok(synthesized.length > 1);
+    assert.ok(synthesized.every((batch) => batch.length <= 900));
+    assert.equal(synthesized.join(' '), text);
+    assert.equal(played.length, synthesized.length);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -215,11 +230,13 @@ test('audio playback command applies bounded macOS playback speed', () => {
   });
 });
 
-test('splitTextIntoSpeechBatches keeps the first sentence immediately playable', () => {
-  assert.deepEqual(
-    splitTextIntoSpeechBatches('First sentence. Second sentence! Third sentence?'),
-    ['First sentence.', 'Second sentence!', 'Third sentence?'],
-  );
+test('splitTextIntoSpeechBatches keeps the first chunk short and groups later sentences', () => {
+  const text = Array.from({ length: 8 }, (_, i) => `Sentence ${i + 1} ${'detail '.repeat(12)}.`).join(' ');
+  const batches = splitTextIntoSpeechBatches(text);
+  assert.ok(batches.length > 1);
+  assert.ok(batches[0].length <= 260);
+  assert.ok(batches.slice(1).every((batch) => batch.length <= 650));
+  assert.equal(batches.join(' '), text);
 });
 
 test('splitTextIntoSpeechBatches splits very long sentences at word boundaries', () => {
@@ -298,10 +315,12 @@ test('speakText prefetches the next sentence while the current sentence plays', 
   const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-batch-home-'));
   const events = [];
   const progress = [];
+  const first = `First ${'detail '.repeat(42)}.`;
+  const second = `Second ${'detail '.repeat(42)}.`;
   try {
     await speakText({
       home,
-      text: 'First sentence. Second sentence.',
+      text: `${first} ${second}`,
       voice: 'heart',
       rate: 1,
       synthesize: async (actualHome, input) => {
@@ -321,7 +340,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       player: async (path) => {
         events.push(`play:${path.endsWith('first.wav') ? 'first' : 'second'}`);
         if (path.endsWith('first.wav')) {
-          assert.ok(events.includes('synth:Second sentence.'));
+          assert.ok(events.includes(`synth:${second}`));
         }
       },
       onProgress: (event) => {
@@ -329,31 +348,35 @@ test('speakText prefetches the next sentence while the current sentence plays', 
       },
     });
     assert.deepEqual(events, [
-      'synth:First sentence.',
-      'synth:Second sentence.',
+      `synth:${first}`,
+      `synth:${second}`,
       'play:first',
       'play:second',
     ]);
     assert.deepEqual(progress, [
       {
+        chunkText: first,
         current: 0,
         message: 'Generating chunk 1 of 2',
         status: 'generating',
         total: 2,
       },
       {
+        chunkText: first,
         current: 1,
         message: 'Reading chunk 1 of 2',
         status: 'reading',
         total: 2,
       },
       {
+        chunkText: second,
         current: 1,
         message: 'Preparing chunk 2 of 2',
         status: 'generating',
         total: 2,
       },
       {
+        chunkText: second,
         current: 2,
         message: 'Reading chunk 2 of 2',
         status: 'reading',
@@ -369,10 +392,12 @@ test('speakText reads live playback rate when playing prefetched batches', async
   const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-dynamic-rate-home-'));
   const playbackRates = [];
   let currentRate = 0.8;
+  const first = `First ${'detail '.repeat(42)}.`;
+  const second = `Second ${'detail '.repeat(42)}.`;
   try {
     await speakText({
       home,
-      text: 'First sentence. Second sentence.',
+      text: `${first} ${second}`,
       playbackRate: () => currentRate,
       rate: 1,
       synthesize: async (_actualHome, input) => {
@@ -402,11 +427,12 @@ test('speakText reads live playback rate when playing prefetched batches', async
 test('speakText prefetches multiple future sentences before first playback', async () => {
   const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-prefetch-home-'));
   const events = [];
+  const sentences = ['One', 'Two', 'Three', 'Four'].map((label) => `${label} ${'detail '.repeat(50)}.`);
   try {
     await speakText({
       home,
       prefetch: 3,
-      text: 'One. Two. Three. Four.',
+      text: sentences.join(' '),
       synthesize: async (_actualHome, input) => {
         events.push(`synth:${input.text}`);
         return {
@@ -421,26 +447,26 @@ test('speakText prefetches multiple future sentences before first playback', asy
         };
       },
       player: async (path) => {
-        if (path.endsWith('One..wav')) {
+        if (path.endsWith(`${sentences[0]}.wav`)) {
           assert.deepEqual(events.slice(0, 4), [
-            'synth:One.',
-            'synth:Two.',
-            'synth:Three.',
-            'synth:Four.',
+            `synth:${sentences[0]}`,
+            `synth:${sentences[1]}`,
+            `synth:${sentences[2]}`,
+            `synth:${sentences[3]}`,
           ]);
         }
         events.push(`play:${path.split('/').pop()}`);
       },
     });
     assert.deepEqual(events, [
-      'synth:One.',
-      'synth:Two.',
-      'synth:Three.',
-      'synth:Four.',
-      'play:One..wav',
-      'play:Two..wav',
-      'play:Three..wav',
-      'play:Four..wav',
+      `synth:${sentences[0]}`,
+      `synth:${sentences[1]}`,
+      `synth:${sentences[2]}`,
+      `synth:${sentences[3]}`,
+      `play:${sentences[0]}.wav`,
+      `play:${sentences[1]}.wav`,
+      `play:${sentences[2]}.wav`,
+      `play:${sentences[3]}.wav`,
     ]);
   } finally {
     rmSync(home, { recursive: true, force: true });

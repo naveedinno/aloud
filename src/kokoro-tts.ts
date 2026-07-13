@@ -19,6 +19,7 @@ try:
     from kokoro import KPipeline
     import numpy as np
     import soundfile as sf
+    import torch
 except Exception as exc:
     raise RuntimeError(
         'Kokoro is not installed. Run: brew install espeak-ng && python3 -m pip install "kokoro>=0.9.4" soundfile'
@@ -26,15 +27,16 @@ except Exception as exc:
 
 pipeline = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
 chunks = []
-for result in pipeline(text, voice=voice, speed=speed, split_pattern=r'\n+'):
-    audio = result[2] if isinstance(result, tuple) else getattr(result, 'audio', None)
-    if audio is None:
-        continue
-    if hasattr(audio, 'detach'):
-        audio = audio.detach().cpu().numpy()
-    else:
-        audio = np.asarray(audio)
-    chunks.append(audio)
+with torch.inference_mode():
+    for result in pipeline(text, voice=voice, speed=speed, split_pattern=r'\n+'):
+        audio = result[2] if isinstance(result, tuple) else getattr(result, 'audio', None)
+        if audio is None:
+            continue
+        if hasattr(audio, 'detach'):
+            audio = audio.detach().cpu().numpy()
+        else:
+            audio = np.asarray(audio)
+        chunks.append(audio)
 
 if not chunks:
     raise RuntimeError('Kokoro produced no audio.')
@@ -50,6 +52,7 @@ try:
     from kokoro import KPipeline
     import numpy as np
     import soundfile as sf
+    import torch
 except Exception as exc:
     print(json.dumps({
         "id": None,
@@ -59,25 +62,34 @@ except Exception as exc:
     raise
 
 pipelines = {}
+shared_model = None
 device = os.environ.get("KOKORO_READER_DEVICE", os.environ.get("DIFFSTORY_KOKORO_DEVICE", "cpu")) or None
 
 def pipeline_for(lang_code):
+    global shared_model
     if lang_code not in pipelines:
-        pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
+        pipelines[lang_code] = KPipeline(
+            lang_code=lang_code,
+            repo_id="hexgrad/Kokoro-82M",
+            model=shared_model if shared_model is not None else True,
+            device=device
+        )
+        shared_model = pipelines[lang_code].model
     return pipelines[lang_code]
 
 def synthesize(request):
     pipeline = pipeline_for(request["lang_code"])
     chunks = []
-    for result in pipeline(request["text"], voice=request["voice"], speed=float(request["speed"]), split_pattern=r'\n+'):
-        audio = result[2] if isinstance(result, tuple) else getattr(result, 'audio', None)
-        if audio is None:
-            continue
-        if hasattr(audio, 'detach'):
-            audio = audio.detach().cpu().numpy()
-        else:
-            audio = np.asarray(audio)
-        chunks.append(audio)
+    with torch.inference_mode():
+        for result in pipeline(request["text"], voice=request["voice"], speed=float(request["speed"]), split_pattern=r'\n+'):
+            audio = result[2] if isinstance(result, tuple) else getattr(result, 'audio', None)
+            if audio is None:
+                continue
+            if hasattr(audio, 'detach'):
+                audio = audio.detach().cpu().numpy()
+            else:
+                audio = np.asarray(audio)
+            chunks.append(audio)
     if not chunks:
         raise RuntimeError('Kokoro produced no audio.')
     audio = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
@@ -111,6 +123,10 @@ export interface KokoroSynthesizerSession {
   synthesize(input: KokoroTtsRequest, opts?: { signal?: AbortSignal }): Promise<KokoroTtsCacheEntry & { cached: boolean; url: string }>;
   dispose(): void;
 }
+
+export type ManagedKokoroSynthesizer = KokoroSynthesizerSession;
+
+export const KOKORO_IDLE_UNLOAD_MS = 20_000;
 
 export const KOKORO_VOICES = {
   af_heart: { label: 'Heart', description: 'Warm American female narrator.', langCode: 'a' },
@@ -276,8 +292,66 @@ export function createKokoroSynthesizerSession(
   };
 }
 
-export function kokoroWorkerCount(value = 3): number {
-  const n = Number.isFinite(value) ? Math.trunc(value) : 3;
+export function createManagedKokoroSynthesizer(
+  home: string,
+  opts: {
+    command?: string;
+    createSession?: () => KokoroSynthesizerSession;
+    idleMs?: number;
+    workers?: number;
+  } = {},
+): ManagedKokoroSynthesizer {
+  const idleMs = Number.isFinite(opts.idleMs) ? Math.max(0, Number(opts.idleMs)) : KOKORO_IDLE_UNLOAD_MS;
+  let activeRequests = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let session: KokoroSynthesizerSession | undefined;
+
+  const clearIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+  const disposeSession = () => {
+    clearIdleTimer();
+    session?.dispose();
+    session = undefined;
+  };
+  const scheduleIdleUnload = () => {
+    clearIdleTimer();
+    if (!session || activeRequests > 0) return;
+    if (idleMs === 0) {
+      disposeSession();
+      return;
+    }
+    idleTimer = setTimeout(disposeSession, idleMs);
+    idleTimer.unref?.();
+  };
+  const ensureSession = () => {
+    session ??= opts.createSession?.() ?? createKokoroSynthesizerSession(home, {
+      command: opts.command,
+      workers: opts.workers ?? 1,
+    });
+    return session;
+  };
+
+  return {
+    async synthesize(input, requestOpts = {}) {
+      clearIdleTimer();
+      activeRequests += 1;
+      try {
+        return await ensureSession().synthesize(input, requestOpts);
+      } finally {
+        activeRequests -= 1;
+        scheduleIdleUnload();
+      }
+    },
+    dispose() {
+      disposeSession();
+    },
+  };
+}
+
+export function kokoroWorkerCount(value = 1): number {
+  const n = Number.isFinite(value) ? Math.trunc(value) : 1;
   return Math.max(1, Math.min(4, n));
 }
 
@@ -376,10 +450,8 @@ class KokoroWorker {
       const cleanupAbort = () => signal?.removeEventListener('abort', onAbort);
       const onAbort = () => {
         cleanupAbort();
-        this.pending.delete(id);
         rmSync(request.outputPath, { force: true });
-        this.restart();
-        reject(speechCancelled());
+        this.restart(speechCancelled());
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       this.pending.set(id, {
@@ -427,17 +499,19 @@ class KokoroWorker {
     });
     child.on('error', (err) => this.rejectAll(kokoroUnavailable(err.message)));
     child.on('close', (code) => {
-      if (this.child === child) this.child = undefined;
+      if (this.child !== child) return;
+      this.child = undefined;
       const detail = this.stderr.trim() || `python worker exited with status ${code}`;
       this.rejectAll(kokoroUnavailable(detail));
     });
     return child;
   }
 
-  private restart(): void {
+  private restart(reason: Error): void {
     const child = this.child;
     this.child = undefined;
     if (child && !child.killed) child.kill('SIGTERM');
+    this.rejectAll(reason);
   }
 
   private readStdout(chunk: string): void {

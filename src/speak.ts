@@ -42,9 +42,12 @@ export type SpeechPlayer = (path: string, opts?: {
 }) => Promise<void>;
 export type SpeechMode = 'auto' | 'fast-start' | 'smooth';
 export type SpeechProgressStatus = 'generating' | 'reading';
-const AUTO_SMOOTH_MIN_CHARS = 900;
+export const DEFAULT_SPEECH_BATCH_CHARS = 650;
+export const FIRST_SPEECH_BATCH_CHARS = 260;
+export const SMOOTH_SPEECH_BATCH_CHARS = 900;
 
 export interface SpeechProgress {
+  chunkText: string;
   current: number;
   message: string;
   status: SpeechProgressStatus;
@@ -53,6 +56,7 @@ export interface SpeechProgress {
 
 export interface SpeakTextOptions {
   batch?: boolean;
+  batches?: string[];
   home?: string;
   mode?: SpeechMode;
   prefetch?: number;
@@ -65,6 +69,7 @@ export interface SpeakTextOptions {
   onProgress?: (progress: SpeechProgress) => void;
   onPlaybackHandle?: (handle: SpeechPlaybackHandle | undefined) => void;
   signal?: AbortSignal;
+  startAt?: number;
   workers?: number;
 }
 
@@ -85,7 +90,7 @@ export function parseSpeakArgs(argv: string[]): SpeakArgs {
     text: '',
     voice: 'af_heart',
     voiceExplicit: false,
-    workers: 3,
+    workers: 1,
   };
   const text: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -146,8 +151,7 @@ export async function speakText(options: SpeakTextOptions): Promise<SpeechResult
   const synthesize = options.synthesize ?? (session ? ((_: string, input: KokoroTtsRequest, opts?: { signal?: AbortSignal }) => session.synthesize(input, opts)) : synthesizeWithKokoro);
   const player = options.player ?? playAudio;
   try {
-    const mode = effectiveSpeechMode(options.mode, text);
-    if (mode === 'smooth' || options.batch === false) {
+    if (options.batch === false) {
       return await speakFullText({ ...options, home, text, synthesize, player });
     }
     return await speakTextInBatches({ ...options, home, text, synthesize, player });
@@ -156,7 +160,11 @@ export async function speakText(options: SpeakTextOptions): Promise<SpeechResult
   }
 }
 
-export function splitTextIntoSpeechBatches(text: string, maxChars = 900): string[] {
+export function splitTextIntoSpeechBatches(
+  text: string,
+  maxChars = DEFAULT_SPEECH_BATCH_CHARS,
+  firstMaxChars = Math.min(FIRST_SPEECH_BATCH_CHARS, maxChars),
+): string[] {
   const clean = String(text ?? '')
     .replace(/\r\n?/g, '\n')
     .split(/\n+/)
@@ -166,25 +174,52 @@ export function splitTextIntoSpeechBatches(text: string, maxChars = 900): string
   if (!clean) return [];
 
   const sentences = splitSentences(clean);
+  const units = sentences.flatMap((sentence) => sentence.length <= maxChars
+    ? [sentence]
+    : splitLongSentence(sentence, maxChars));
   const batches: string[] = [];
-  for (const sentence of sentences) {
-    if (sentence.length <= maxChars) {
-      batches.push(sentence);
-      continue;
+  let current = '';
+  for (const unit of units) {
+    const limit = batches.length === 0 ? firstMaxChars : maxChars;
+    const combined = current ? `${current} ${unit}` : unit;
+    if (current && combined.length > limit) {
+      batches.push(current);
+      current = unit;
+    } else {
+      current = combined;
     }
-    batches.push(...splitLongSentence(sentence, maxChars));
   }
+  if (current) batches.push(current);
   return batches;
+}
+
+export function speechBatchesForMode(text: string, mode?: SpeechMode): string[] {
+  const selected = speechMode(mode);
+  if (selected === 'smooth') {
+    // Smooth playback still has to respect Kokoro's per-request limit. It uses
+    // longer batches and a larger prefetch queue, not one unbounded request.
+    return splitTextIntoSpeechBatches(text, SMOOTH_SPEECH_BATCH_CHARS, SMOOTH_SPEECH_BATCH_CHARS);
+  }
+  return selected === 'fast-start'
+    ? splitTextIntoSpeechBatches(text, 520, 170)
+    : splitTextIntoSpeechBatches(text);
+}
+
+export function speechPrefetchForMode(mode?: SpeechMode): number {
+  return speechMode(mode) === 'smooth' ? 6 : 3;
 }
 
 async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text' | 'synthesize' | 'player'>> & SpeakTextOptions): Promise<SpeechResult> {
   const home = options.home ?? homedir();
-  const batches = splitTextIntoSpeechBatches(options.text);
+  const batches = options.batches?.map((batch) => String(batch).trim()).filter(Boolean)
+    ?? speechBatchesForMode(options.text, options.mode);
   if (batches.length === 0) throw new Error('No text to speak.');
+  const startAt = Math.max(0, Math.min(batches.length - 1, Math.trunc(options.startAt ?? 0)));
   const prefetch = prefetchWindow(options.prefetch);
   options.onProgress?.({
-    current: 0,
-    message: batches.length === 1 ? 'Generating selected text' : `Generating chunk 1 of ${batches.length}`,
+    chunkText: batches[startAt],
+    current: startAt,
+    message: batches.length === 1 ? 'Generating selected text' : `Generating chunk ${startAt + 1} of ${batches.length}`,
     status: 'generating',
     total: batches.length,
   });
@@ -199,7 +234,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
   );
 
   const tasks = new Map<number, ReturnType<typeof synthesizeBatch>>();
-  let nextToSchedule = 0;
+  let nextToSchedule = startAt;
   const schedule = (index: number) => {
     if (!tasks.has(index)) tasks.set(index, synthesizeBatch(batches[index]));
   };
@@ -210,9 +245,9 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
     }
   };
 
-  scheduleThrough(0);
+  scheduleThrough(startAt);
   let first: SpeechResult | undefined;
-  for (let i = 0; i < batches.length; i++) {
+  for (let i = startAt; i < batches.length; i++) {
     const currentTask = tasks.get(i);
     if (!currentTask) throw new Error(`Speech batch ${i + 1} was not scheduled.`);
     const current = await currentTask;
@@ -220,6 +255,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
     first ??= current.result;
     scheduleThrough(i + prefetch);
     options.onProgress?.({
+      chunkText: batches[i],
       current: i + 1,
       message: batches.length === 1 ? 'Reading selected text' : `Reading chunk ${i + 1} of ${batches.length}`,
       status: 'reading',
@@ -233,6 +269,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
     tasks.delete(i);
     if (i + 1 < batches.length) {
       options.onProgress?.({
+        chunkText: batches[i + 1],
         current: i + 1,
         message: `Preparing chunk ${i + 2} of ${batches.length}`,
         status: 'generating',
@@ -246,6 +283,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
 
 async function speakFullText(options: Required<Pick<SpeakTextOptions, 'text' | 'synthesize' | 'player' | 'home'>> & SpeakTextOptions): Promise<SpeechResult> {
   options.onProgress?.({
+    chunkText: options.text,
     current: 0,
     message: 'Generating full text',
     status: 'generating',
@@ -258,6 +296,7 @@ async function speakFullText(options: Required<Pick<SpeakTextOptions, 'text' | '
     rate: speechRate(options.rate),
   }, { signal: options.signal });
   options.onProgress?.({
+    chunkText: options.text,
     current: 1,
     message: 'Reading full text',
     status: 'reading',
@@ -280,12 +319,6 @@ export function speechMode(mode?: string): SpeechMode {
   const value = String(mode ?? '').toLowerCase().trim().replace(/[\s_]+/g, '-');
   if (value === 'auto' || value === 'smart') return 'auto';
   return value === 'smooth' || value === 'whole' || value === 'whole-text' || value === 'full' ? 'smooth' : 'fast-start';
-}
-
-function effectiveSpeechMode(mode: SpeakTextOptions['mode'], text: string): Exclude<SpeechMode, 'auto'> {
-  const selected = speechMode(mode);
-  if (selected !== 'auto') return selected;
-  return splitTextIntoSpeechBatches(text).length > 3 || text.length >= AUTO_SMOOTH_MIN_CHARS ? 'smooth' : 'fast-start';
 }
 
 function speechRate(rate: SpeakTextOptions['rate']): number | undefined {

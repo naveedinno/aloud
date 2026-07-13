@@ -41,6 +41,8 @@ struct DaemonStatus: Decodable {
     let paused: Bool?
     let rate: Double?
     let running: Bool?
+    let shortcut: String?
+    let shortcutLabel: String?
     let state: State?
     let voice: String?
     let voiceLabel: String?
@@ -65,11 +67,14 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private var stopMenuItem: NSMenuItem!
     private var pauseMenuItem: NSMenuItem!
     private var readerItems: [NSMenuItem] = []
+    private var selectionMenuItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
     private var speedItems: [NSMenuItem] = []
     private var currentMode = "auto"
     private var currentModeLabel = "Auto"
     private var currentRate: Double = 1
+    private var currentShortcut = "option+r"
+    private var currentShortcutLabel = "Option + R"
     private var currentVoice = "af_heart"
     private var currentVoiceLabel = "Heart"
     private var isPaused = false
@@ -88,6 +93,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         buildMenu()
         registerReadSelectionHotKey()
+        reportAccessibilityTrust()
         pollStatus()
         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.pollStatus()
@@ -120,9 +126,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         pauseMenuItem.target = self
         menu.addItem(pauseMenuItem)
 
-        let selectionItem = NSMenuItem(title: "Read Selection (Option+R)", action: #selector(readSelection), keyEquivalent: "")
-        selectionItem.target = self
-        menu.addItem(selectionItem)
+        selectionMenuItem = NSMenuItem(title: "Read Selection (Option + R)", action: #selector(readSelection), keyEquivalent: "")
+        selectionMenuItem.target = self
+        menu.addItem(selectionMenuItem)
 
         let clipboardItem = NSMenuItem(title: "Read Clipboard", action: #selector(readClipboard), keyEquivalent: "")
         clipboardItem.target = self
@@ -205,6 +211,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         stopMenuItem.isEnabled = isRunning
         pauseMenuItem.isEnabled = isRunning
         pauseMenuItem.title = isPaused ? "Resume Reading" : "Pause Reading"
+        selectionMenuItem.title = "Read Selection (\(currentShortcutLabel))"
         setMenuBarIcon(state: visualState)
         for item in readerItems {
             item.state = (item.representedObject as? String) == currentVoice ? .on : .off
@@ -220,6 +227,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     }
 
     private func pollStatus() {
+        reportAccessibilityTrust()
         request(path: "status", method: "GET") { [weak self] data in
             guard let self else { return }
             guard let data, let status = try? JSONDecoder().decode(DaemonStatus.self, from: data), status.ok == true else {
@@ -236,6 +244,14 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.async {
                 self.currentRate = status.rate ?? self.currentRate
+                let nextShortcut = status.shortcut ?? self.currentShortcut
+                if nextShortcut != self.currentShortcut {
+                    self.currentShortcut = nextShortcut
+                    self.currentShortcutLabel = status.shortcutLabel ?? self.currentShortcutLabel
+                    self.registerReadSelectionHotKey()
+                } else {
+                    self.currentShortcutLabel = status.shortcutLabel ?? self.currentShortcutLabel
+                }
                 self.currentMode = status.mode ?? self.currentMode
                 self.currentModeLabel = status.modeLabel ?? self.currentModeLabel
                 self.currentVoice = status.voice ?? self.currentVoice
@@ -256,24 +272,50 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     }
 
     private func registerReadSelectionHotKey() {
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            hotKeyEventHandler,
-            1,
-            &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &hotKeyHandlerRef
-        )
-        var hotKeyID = EventHotKeyID(signature: fourCharCode("KOKR"), id: 1)
+        if hotKeyHandlerRef == nil {
+            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                hotKeyEventHandler,
+                1,
+                &eventType,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &hotKeyHandlerRef
+            )
+        }
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        let definition = shortcutDefinition(currentShortcut)
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("KOKR"), id: 1)
         RegisterEventHotKey(
-            UInt32(kVK_ANSI_R),
-            UInt32(optionKey),
+            definition.keyCode,
+            definition.modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
             &hotKeyRef
         )
+    }
+
+    private func shortcutDefinition(_ shortcut: String) -> (keyCode: UInt32, modifiers: UInt32) {
+        switch shortcut {
+        case "option+space":
+            return (UInt32(kVK_Space), UInt32(optionKey))
+        case "control+option+r":
+            return (UInt32(kVK_ANSI_R), UInt32(controlKey | optionKey))
+        case "command+shift+r":
+            return (UInt32(kVK_ANSI_R), UInt32(cmdKey | shiftKey))
+        default:
+            return (UInt32(kVK_ANSI_R), UInt32(optionKey))
+        }
+    }
+
+    private func reportAccessibilityTrust() {
+        let trusted = AXIsProcessTrusted()
+        let payload = "{\"trusted\":\(trusted ? "true" : "false")}".data(using: .utf8)
+        request(path: "accessibility", method: "POST", body: payload) { _ in }
     }
 
     @objc private func stopReading() {

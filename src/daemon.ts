@@ -2,9 +2,26 @@ import { spawn } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createKokoroSynthesizerSession, kokoroRate, kokoroVoiceLabel, kokoroVoiceOptions, normalizeKokoroVoice } from './kokoro-tts.js';
+import { createManagedKokoroSynthesizer, kokoroRate, kokoroVoiceLabel, kokoroVoiceOptions, normalizeKokoroVoice } from './kokoro-tts.js';
 import type { SpeechControllerState } from './controller.js';
-import { playAudio, speakText, speechMode, type SpeechMode, type SpeechPlaybackHandle, type SpeechResult } from './speak.js';
+import {
+  DEFAULT_READER_PREFERENCES,
+  globalShortcutLabel,
+  loadReaderPreferences,
+  normalizeGlobalShortcut,
+  saveReaderPreferences,
+  type GlobalShortcut,
+} from './preferences.js';
+import {
+  playAudio,
+  speechBatchesForMode,
+  speakText,
+  speechPrefetchForMode,
+  speechMode,
+  type SpeechMode,
+  type SpeechPlaybackHandle,
+  type SpeechResult,
+} from './speak.js';
 
 export const SPEECH_DAEMON_PORT = 17878;
 const DAEMON_URL = `http://127.0.0.1:${SPEECH_DAEMON_PORT}`;
@@ -20,20 +37,83 @@ export interface SpeechDaemonRequest {
   voice?: string;
 }
 
+export interface SpeechDaemonStatus {
+  accessibilityTrusted?: boolean;
+  canGoNext: boolean;
+  canGoPrevious: boolean;
+  canReplay: boolean;
+  mode: SpeechMode;
+  modeLabel: string;
+  ok: true;
+  paused: boolean;
+  rate: number;
+  running: boolean;
+  shortcut: GlobalShortcut;
+  shortcutLabel: string;
+  state: SpeechControllerState & { chunkText?: string };
+  voice: string;
+  voiceLabel: string;
+}
+
+export interface SpeechDaemonSettings {
+  mode?: string;
+  rate?: number;
+  shortcut?: string;
+  voice?: string;
+}
+
+export type SpeechDaemonControl = 'pause' | 'resume' | 'stop';
+export type SpeechDaemonSeek = 'next' | 'previous' | 'replay';
+
 export async function runSpeechDaemon(): Promise<void> {
   const home = homedir();
-  const session = createKokoroSynthesizerSession(home, { workers: 3 });
-  const synthesize = (_home: string, input: Parameters<typeof session.synthesize>[0], opts?: Parameters<typeof session.synthesize>[1]) => session.synthesize(input, opts);
+  const storedPreferences = loadReaderPreferences(home);
+  const synthesizer = createManagedKokoroSynthesizer(home, { workers: 1 });
+  const synthesize = (_home: string, input: Parameters<typeof synthesizer.synthesize>[0], opts?: Parameters<typeof synthesizer.synthesize>[1]) => synthesizer.synthesize(input, opts);
+  let accessibilityTrusted: boolean | undefined;
   let currentAbort: AbortController | undefined;
-  let currentMode: SpeechMode = 'auto';
+  let currentChunks: string[] = [];
+  let currentJob: Promise<void> | undefined;
+  let currentMode: SpeechMode = speechMode(storedPreferences.mode ?? DEFAULT_READER_PREFERENCES.mode);
   let currentPaused = false;
   let currentPlayback: SpeechPlaybackHandle | undefined;
-  let currentRate = 1;
-  let currentVoice = normalizeDaemonVoice('af_heart');
-  let currentState: SpeechControllerState = { message: 'Ready', rate: currentRate, status: 'done' };
+  let currentRate = kokoroRate(storedPreferences.rate ?? DEFAULT_READER_PREFERENCES.rate);
+  let currentRequest: SpeechDaemonRequest | undefined;
+  let currentShortcut = normalizeGlobalShortcut(storedPreferences.shortcut);
+  let currentStartAt = 0;
+  let currentVoice = normalizeDaemonVoice(storedPreferences.voice ?? DEFAULT_READER_PREFERENCES.voice);
+  let currentState: SpeechControllerState & { chunkText?: string } = { message: 'Ready', rate: currentRate, status: 'done' };
 
-  const updateState = (state: Partial<SpeechControllerState>) => {
+  const updateState = (state: Partial<SpeechControllerState & { chunkText?: string }>) => {
     currentState = { ...currentState, ...state, rate: currentRate };
+  };
+
+  const persistPreferences = () => saveReaderPreferences(home, {
+    mode: currentMode,
+    rate: currentRate,
+    shortcut: currentShortcut,
+    voice: currentVoice,
+  });
+
+  const statusBody = (): SpeechDaemonStatus => {
+    const currentIndex = activeChunkIndex(currentState.current, currentStartAt, currentChunks.length);
+    return {
+      accessibilityTrusted,
+      canGoNext: currentChunks.length > 1 && currentIndex < currentChunks.length - 1,
+      canGoPrevious: currentChunks.length > 1 && currentIndex > 0,
+      canReplay: currentChunks.length > 0,
+      mode: currentMode,
+      modeLabel: speechModeLabel(currentMode),
+      ok: true,
+      paused: currentPaused,
+      rate: currentRate,
+      running: Boolean(currentAbort),
+      shortcut: currentShortcut,
+      shortcutLabel: globalShortcutLabel(currentShortcut),
+      state: currentState,
+      voice: currentVoice,
+      voiceLabel: daemonVoiceLabel(currentVoice),
+    };
   };
 
   const stopCurrent = () => {
@@ -58,69 +138,98 @@ export async function runSpeechDaemon(): Promise<void> {
     updateState({ message: currentAbort ? 'Reading selected text' : 'Ready' });
   };
 
+  const startJob = (input: SpeechDaemonRequest, chunks: string[], startAt = 0) => {
+    const abort = new AbortController();
+    currentPaused = false;
+    currentRequest = input;
+    currentChunks = chunks;
+    currentStartAt = Math.max(0, Math.min(chunks.length - 1, startAt));
+    const jobInput: SpeechDaemonRequest = {
+      ...input,
+      mode: currentMode,
+      rate: currentRate,
+      voice: selectedDaemonVoice(currentVoice),
+    };
+    updateState({
+      chunkText: chunks[currentStartAt] ?? input.text,
+      current: currentStartAt,
+      message: chunks.length > 1 ? `Preparing chunk ${currentStartAt + 1} of ${chunks.length}` : 'Preparing selected text',
+      status: 'starting',
+      total: chunks.length,
+    });
+    currentAbort = abort;
+    const job = speakDaemonJob(
+      home,
+      jobInput,
+      chunks,
+      currentStartAt,
+      abort,
+      synthesize,
+      () => currentRate,
+      updateState,
+      (handle) => {
+        currentPlayback = handle;
+        if (currentPaused) currentPlayback?.pause();
+      },
+    );
+    currentJob = job;
+    void job.finally(() => {
+      if (currentJob === job) {
+        currentPaused = false;
+        currentPlayback = undefined;
+        currentAbort = undefined;
+        currentJob = undefined;
+      }
+    });
+  };
+
   const server = createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/health') {
         return sendJson(response, { ok: true });
       }
       if (request.method === 'GET' && request.url === '/status') {
-        return sendJson(response, {
-          ok: true,
-          mode: currentMode,
-          modeLabel: speechModeLabel(currentMode),
-          paused: currentPaused,
-          rate: currentRate,
-          running: Boolean(currentAbort),
-          state: currentState,
-          voice: currentVoice,
-          voiceLabel: daemonVoiceLabel(currentVoice),
-        });
+        return sendJson(response, statusBody());
+      }
+      if (request.method === 'POST' && request.url === '/settings') {
+        const body = await readJson<SpeechDaemonSettings>(request);
+        if (body.mode !== undefined) currentMode = speechMode(body.mode);
+        if (body.rate !== undefined) currentRate = kokoroRate(body.rate);
+        if (body.shortcut !== undefined) currentShortcut = normalizeGlobalShortcut(body.shortcut);
+        if (body.voice !== undefined) currentVoice = normalizeDaemonVoice(body.voice);
+        updateState({ rate: currentRate });
+        persistPreferences();
+        return sendJson(response, statusBody());
       }
       if (request.method === 'POST' && request.url === '/rate') {
         const body = await readJson<{ rate?: number }>(request);
         currentRate = kokoroRate(body.rate);
         updateState({ rate: currentRate });
-        return sendJson(response, {
-          ok: true,
-          mode: currentMode,
-          modeLabel: speechModeLabel(currentMode),
-          paused: currentPaused,
-          rate: currentRate,
-          running: Boolean(currentAbort),
-          state: currentState,
-          voice: currentVoice,
-          voiceLabel: daemonVoiceLabel(currentVoice),
-        });
+        persistPreferences();
+        return sendJson(response, statusBody());
       }
       if (request.method === 'POST' && request.url === '/voice') {
         const body = await readJson<{ voice?: string }>(request);
         currentVoice = normalizeDaemonVoice(body.voice);
-        return sendJson(response, {
-          ok: true,
-          mode: currentMode,
-          modeLabel: speechModeLabel(currentMode),
-          paused: currentPaused,
-          rate: currentRate,
-          running: Boolean(currentAbort),
-          state: currentState,
-          voice: currentVoice,
-          voiceLabel: daemonVoiceLabel(currentVoice),
-        });
+        persistPreferences();
+        return sendJson(response, statusBody());
       }
       if (request.method === 'POST' && request.url === '/mode') {
         const body = await readJson<{ mode?: string }>(request);
         currentMode = speechMode(body.mode);
-        return sendJson(response, {
-          ok: true,
-          mode: currentMode,
-          modeLabel: speechModeLabel(currentMode),
-          paused: currentPaused,
-          rate: currentRate,
-          running: Boolean(currentAbort),
-          state: currentState,
-          voice: currentVoice,
-          voiceLabel: daemonVoiceLabel(currentVoice),
-        });
+        persistPreferences();
+        return sendJson(response, statusBody());
+      }
+      if (request.method === 'POST' && request.url === '/shortcut') {
+        const body = await readJson<{ shortcut?: string }>(request);
+        currentShortcut = normalizeGlobalShortcut(body.shortcut);
+        persistPreferences();
+        return sendJson(response, statusBody());
+      }
+      if (request.method === 'POST' && request.url === '/accessibility') {
+        const body = await readJson<{ trusted?: boolean }>(request);
+        accessibilityTrusted = typeof body.trusted === 'boolean' ? body.trusted : undefined;
+        return sendJson(response, statusBody());
       }
       if (request.method === 'POST' && request.url === '/stop') {
         stopCurrent();
@@ -134,37 +243,33 @@ export async function runSpeechDaemon(): Promise<void> {
         resumeCurrent();
         return sendJson(response, { ok: true, paused: currentPaused });
       }
+      if (request.method === 'POST' && request.url === '/seek') {
+        const body = await readJson<{ action?: SpeechDaemonSeek }>(request);
+        if (!currentRequest || currentChunks.length === 0) {
+          return sendJson(response, { error: 'Nothing is available to navigate.', ok: false }, 409);
+        }
+        const currentIndex = activeChunkIndex(currentState.current, currentStartAt, currentChunks.length);
+        const target = seekTarget(body.action, currentIndex, currentChunks.length);
+        stopCurrent();
+        await currentJob;
+        startJob(currentRequest, currentChunks, target);
+        return sendJson(response, statusBody());
+      }
       if (request.method === 'POST' && request.url === '/speak') {
         const body = await readJson<SpeechDaemonRequest>(request);
         const text = String(body.text ?? '').trim();
         if (!text) return sendJson(response, { error: 'No text to speak.', ok: false }, 400);
 
         stopCurrent();
-        const abort = new AbortController();
-        currentPaused = false;
+        await currentJob;
         currentMode = speechMode(body.mode ?? currentMode);
         currentRate = kokoroRate(body.rate ?? currentRate);
         currentVoice = normalizeDaemonVoice(body.voice ?? currentVoice);
-        const jobInput: SpeechDaemonRequest = { ...body, mode: currentMode, voice: selectedDaemonVoice(currentVoice) };
-        updateState({ current: 0, message: 'Preparing selected text', status: 'starting', total: undefined });
-        currentAbort = abort;
-        void speakDaemonJob(
-          home,
-          jobInput,
-          abort,
-          synthesize,
-          () => currentRate,
-          updateState,
-          (handle) => {
-            currentPlayback = handle;
-            if (currentPaused) currentPlayback?.pause();
-          },
-          () => {
-            currentPaused = false;
-            currentPlayback = undefined;
-            currentAbort = undefined;
-          });
-        return sendJson(response, { ok: true });
+        currentShortcut = normalizeGlobalShortcut(currentShortcut);
+        persistPreferences();
+        const chunks = body.batch === false ? [text] : speechBatchesForMode(text, currentMode);
+        startJob({ ...body, text }, chunks, 0);
+        return sendJson(response, statusBody());
       }
       response.writeHead(404).end();
     } catch (err) {
@@ -173,7 +278,7 @@ export async function runSpeechDaemon(): Promise<void> {
   });
 
   server.listen(SPEECH_DAEMON_PORT, '127.0.0.1');
-  void warmKokoroWorkers(home, synthesize);
+  server.on('close', () => synthesizer.dispose());
 }
 
 export async function sendSpeakToDaemon(input: SpeechDaemonRequest): Promise<void> {
@@ -185,28 +290,51 @@ export async function stopSpeechDaemonPlayback(): Promise<void> {
   await postJson('/stop', {});
 }
 
+export async function getSpeechDaemonStatus(): Promise<SpeechDaemonStatus> {
+  await ensureSpeechDaemon();
+  return await getJson('/status') as SpeechDaemonStatus;
+}
+
+export async function configureSpeechDaemon(settings: SpeechDaemonSettings): Promise<SpeechDaemonStatus> {
+  await ensureSpeechDaemon();
+  return await postJson('/settings', settings) as SpeechDaemonStatus;
+}
+
+export async function controlSpeechDaemon(action: SpeechDaemonControl): Promise<unknown> {
+  await ensureSpeechDaemon();
+  return await postJson(`/${action}`, {});
+}
+
+export async function seekSpeechDaemon(action: SpeechDaemonSeek): Promise<SpeechDaemonStatus> {
+  await ensureSpeechDaemon();
+  return await postJson('/seek', { action }) as SpeechDaemonStatus;
+}
+
 async function speakDaemonJob(
   home: string,
   input: SpeechDaemonRequest,
+  batches: string[],
+  startAt: number,
   abort: AbortController,
   synthesize: Parameters<typeof speakText>[0]['synthesize'],
   rate: () => number,
-  updateState: (state: Partial<SpeechControllerState>) => void,
+  updateState: (state: Partial<SpeechControllerState & { chunkText?: string }>) => void,
   onPlaybackHandle: (handle: SpeechPlaybackHandle | undefined) => void,
-  onDone: () => void,
 ): Promise<void> {
   try {
     const result = await speakText({
       batch: input.batch,
+      batches,
       home,
       mode: input.mode,
       onPlaybackHandle,
       onProgress: (progress) => updateState(progress),
       player: playAudio,
       playbackRate: rate,
-      prefetch: input.prefetch,
+      prefetch: input.prefetch ?? speechPrefetchForMode(input.mode),
       rate: 1,
       signal: abort.signal,
+      startAt,
       synthesize,
       text: input.text,
       voice: input.voice,
@@ -217,21 +345,7 @@ async function speakDaemonJob(
       message: (err as Error).name === 'AbortError' ? 'Stopped' : (err as Error).message,
       status: (err as Error).name === 'AbortError' ? 'stopped' : 'error',
     });
-  } finally {
-    onDone();
   }
-}
-
-async function warmKokoroWorkers(
-  home: string,
-  synthesize: NonNullable<Parameters<typeof speakText>[0]['synthesize']>,
-): Promise<void> {
-  const warmups = Array.from({ length: 3 }, (_, i) => synthesize(home, {
-    rate: 1,
-    text: `Kokoro warmup ${Date.now()} ${i}.`,
-    voice: 'af_heart',
-  }).catch(() => undefined));
-  await Promise.all(warmups);
 }
 
 async function ensureSpeechDaemon(): Promise<void> {
@@ -344,4 +458,16 @@ function speechModeLabel(mode: SpeechMode): string {
 
 function doneMessage(result: SpeechResult): string {
   return result.cached ? 'Finished from cache' : 'Finished reading';
+}
+
+function activeChunkIndex(current: number | undefined, startAt: number, total: number): number {
+  if (total <= 0) return 0;
+  const index = typeof current === 'number' && current > 0 ? current - 1 : startAt;
+  return Math.max(0, Math.min(total - 1, index));
+}
+
+function seekTarget(action: SpeechDaemonSeek | undefined, current: number, total: number): number {
+  if (action === 'previous') return Math.max(0, current - 1);
+  if (action === 'next') return Math.min(Math.max(0, total - 1), current + 1);
+  return current;
 }

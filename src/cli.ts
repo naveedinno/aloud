@@ -55,12 +55,12 @@ OPTIONS
   --voice <id>  Kokoro voice id or alias. Defaults to af_heart.
   --rate <n>    Speech rate. Defaults to 1.
   --mode <mode> Reading mode: auto, fast-start, or smooth. Defaults to fast-start.
-  --auto        Choose fast-start for short text and smooth for long text.
-  --smooth      Generate the full selection before playback.
-  --prefetch <n> Number of future sentences to prepare in parallel. Defaults to 3.
-  --workers <n> Number of warm Kokoro workers for batched speech. Defaults to 3.
+  --auto        Balance a quick start with a short prepared queue.
+  --smooth      Use larger chunks and a deeper prepared queue for long reads.
+  --prefetch <n> Number of future chunks to prepare ahead. Defaults to 3.
+  --workers <n> Number of Kokoro model workers. Defaults to 1.
   --controller Show a small Stop/progress window while speaking.
-  --daemon     Send speech to the warm local daemon.
+  --daemon     Send speech to the lightweight local daemon.
   --popup      Legacy alias for --controller.
   --no-batch    Generate the full selection before playing it.
   --no-open     Accepted for macOS Service compatibility.

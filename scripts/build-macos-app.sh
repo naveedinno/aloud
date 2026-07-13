@@ -29,9 +29,10 @@ if ! "$NODE_SOURCE" -e 'const major = Number(process.versions.node.split(".")[0]
 fi
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR/dist" "$APP_RESOURCES_DIR/scripts" "$RESOURCES_NODE_DIR"
+mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR/dist" "$APP_RESOURCES_DIR/scripts" "$APP_RESOURCES_DIR/assets" "$RESOURCES_NODE_DIR"
 
 cp -R "$REPO_DIR/dist/." "$APP_RESOURCES_DIR/dist/"
+cp -R "$REPO_DIR/assets/." "$APP_RESOURCES_DIR/assets/"
 cp "$REPO_DIR/package.json" "$APP_RESOURCES_DIR/package.json"
 cp "$REPO_DIR/README.md" "$APP_RESOURCES_DIR/README.md"
 cp "$REPO_DIR/scripts/install-macos-service.sh" "$APP_RESOURCES_DIR/scripts/install-macos-service.sh"
@@ -128,7 +129,7 @@ case "$choice" in
     ;;
   "Install Services"|"install")
     "$APP_RESOURCES_DIR/scripts/install-macos-service.sh"
-    /usr/bin/osascript -e 'display notification "Services and warm daemon installed." with title "Kokoro Reader"'
+    /usr/bin/osascript -e 'display notification "Services and low-memory daemon installed." with title "Kokoro Reader"'
     ;;
   "Setup Kokoro"|"setup")
     escaped_script="${APP_RESOURCES_DIR//\"/\\\"}/scripts/setup-kokoro.sh"

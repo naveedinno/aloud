@@ -74,6 +74,7 @@ test('macOS app bundle builder packages the runtime app', () => {
   assert.match(appBuildScript, /CFBundlePackageType/);
   assert.match(appBuildScript, /<string>APPL<\/string>/);
   assert.match(appBuildScript, /Resources\/app/);
+  assert.match(appBuildScript, /cp -R "\$REPO_DIR\/assets\/\." "\$APP_RESOURCES_DIR\/assets\/"/);
   assert.match(appBuildScript, /scripts\/install-macos-service\.sh/);
   assert.match(appBuildScript, /scripts\/setup-kokoro\.sh/);
   assert.match(appBuildScript, /display dialog messageText with title "Kokoro Reader"/);
