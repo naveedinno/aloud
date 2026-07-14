@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { handle } from '../dist/server.js';
+import { kokoroTtsCacheDir } from '../dist/kokoro-tts.js';
 
 test('reader page renders the core app controls', async () => {
   const { req, res } = mockRequest('GET', '/', '');
@@ -63,13 +66,99 @@ test('reader serves its bundled fonts locally with immutable caching', async () 
 });
 
 test('reader status API proxies the shared daemon state', async () => {
-  const expected = readerStatus({ running: true });
+  const expected = readerStatus({ running: true, state: { chunkEnd: 12, chunkStart: 4, chunkText: 'secret text', message: 'Reading', status: 'reading' } });
   const reader = mockReader(expected);
   const { req, res } = mockRequest('GET', '/api/reader/status', '');
   handle(req, res, undefined, reader);
   await res.done;
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(JSON.parse(res.body), expected);
+  assert.deepEqual(JSON.parse(res.body), {
+    ...expected,
+    state: { chunkEnd: 12, chunkStart: 4, message: 'Reading', status: 'reading' },
+  });
+});
+
+test('reader rejects non-local and cross-site requests before dispatch', async () => {
+  const badHost = mockRequest('GET', '/api/reader/status', '', { host: 'attacker.example' });
+  handle(badHost.req, badHost.res, undefined, mockReader(readerStatus()));
+  await badHost.res.done;
+  assert.equal(badHost.res.statusCode, 403);
+
+  const crossSite = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }), {
+    host: 'localhost:7878',
+    origin: 'https://attacker.example',
+    'sec-fetch-site': 'cross-site',
+  });
+  handle(crossSite.req, crossSite.res, undefined, mockReader(readerStatus()));
+  await crossSite.res.done;
+  assert.equal(crossSite.res.statusCode, 403);
+});
+
+test('reader requires JSON and its HttpOnly local session for mutations', async () => {
+  const reader = mockReader(readerStatus());
+  const options = { requireSession: true, sessionToken: 'test-session' };
+  const page = mockRequest('GET', '/', '');
+  handle(page.req, page.res, undefined, reader, undefined, options);
+  await page.res.done;
+  assert.match(page.res.headers['set-cookie'], /kokoro_reader_session=test-session/);
+  assert.match(page.res.headers['set-cookie'], /HttpOnly/);
+  assert.match(page.res.headers['set-cookie'], /SameSite=Strict/);
+
+  const missingCookie = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }));
+  handle(missingCookie.req, missingCookie.res, undefined, reader, undefined, options);
+  await missingCookie.res.done;
+  assert.equal(missingCookie.res.statusCode, 403);
+
+  const wrongType = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }), {
+    'content-type': 'text/plain',
+    cookie: 'kokoro_reader_session=test-session',
+  });
+  handle(wrongType.req, wrongType.res, undefined, reader, undefined, options);
+  await wrongType.res.done;
+  assert.equal(wrongType.res.statusCode, 415);
+
+  const allowed = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }), {
+    cookie: 'kokoro_reader_session=test-session',
+    origin: 'http://localhost:7878',
+    'sec-fetch-site': 'same-origin',
+  });
+  handle(allowed.req, allowed.res, undefined, reader, undefined, options);
+  await allowed.res.done;
+  assert.equal(allowed.res.statusCode, 200);
+  assert.deepEqual(reader.calls.control, ['stop']);
+});
+
+test('reader returns a JSON 413 for a byte-counted oversized body', async () => {
+  const { req, res } = mockRequest('POST', '/api/tts/kokoro/plan', 'x'.repeat(2 * 1024 * 1024 + 1));
+  handle(req, res);
+  await res.done;
+  assert.equal(res.statusCode, 413);
+  assert.match(JSON.parse(res.body).error, /byte limit/);
+});
+
+test('reader reports and clears old cache entries while preserving the cache contract', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-server-cache-'));
+  try {
+    const dir = kokoroTtsCacheDir(home);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${'a'.repeat(64)}.wav`);
+    writeFileSync(path, wavBytes(96));
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(path, old, old);
+
+    const get = mockRequest('GET', '/api/system/cache', '');
+    handle(get.req, get.res, undefined, undefined, undefined, { home });
+    await get.res.done;
+    assert.deepEqual({ entries: JSON.parse(get.res.body).entries, bytes: JSON.parse(get.res.body).bytes }, { entries: 1, bytes: 96 });
+
+    const clear = mockRequest('POST', '/api/system/cache', JSON.stringify({ action: 'clear' }));
+    handle(clear.req, clear.res, undefined, undefined, undefined, { home });
+    await clear.res.done;
+    assert.equal(clear.res.statusCode, 200);
+    assert.deepEqual({ entries: JSON.parse(clear.res.body).entries, removedEntries: JSON.parse(clear.res.body).removedEntries }, { entries: 0, removedEntries: 1 });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('reader settings API updates the shared daemon', async () => {
@@ -120,7 +209,7 @@ function mockReader(status) {
     async control(action) { calls.control.push(action); },
     async seek(action) { calls.seek.push(action); return status; },
     async settings(input) { calls.settings.push(input); return status; },
-    async speak(input) { calls.speak.push(input); },
+    async speak(input) { calls.speak.push(input); return status; },
     async status() { return status; },
   };
 }
@@ -148,6 +237,18 @@ test('kokoro api validates invalid JSON without running synthesis', async () => 
   await res.done;
   assert.equal(res.statusCode, 400);
   assert.deepEqual(JSON.parse(res.body), { error: 'invalid JSON' });
+});
+
+test('kokoro api enforces the shared document character limit before synthesis', async () => {
+  let called = false;
+  const { req, res } = mockRequest('POST', '/api/tts/kokoro', JSON.stringify({ text: 'x'.repeat(240_001) }));
+  handle(req, res, async () => {
+    called = true;
+    throw new Error('must not run');
+  });
+  await res.done;
+  assert.equal(res.statusCode, 413);
+  assert.equal(called, false);
 });
 
 test('kokoro api surfaces synthesis validation errors', async () => {
@@ -183,9 +284,14 @@ test('kokoro api returns generated audio metadata', async () => {
   });
 });
 
-function mockRequest(method, url, body) {
+function mockRequest(method, url, body, headers = {}) {
   const listeners = {};
   const req = {
+    headers: {
+      host: 'localhost:7878',
+      ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+      ...headers,
+    },
     method,
     url,
     on(event, callback) {
@@ -193,6 +299,7 @@ function mockRequest(method, url, body) {
       return this;
     },
     destroy() {},
+    resume() {},
   };
   let resolveDone;
   const res = {
@@ -221,4 +328,13 @@ function mockRequest(method, url, body) {
     if (listeners.end) listeners.end();
   });
   return { req, res };
+}
+
+function wavBytes(size = 64) {
+  const buffer = Buffer.alloc(Math.max(44, size));
+  buffer.write('RIFF', 0, 'ascii');
+  buffer.writeUInt32LE(buffer.length - 8, 4);
+  buffer.write('WAVE', 8, 'ascii');
+  buffer.write('fmt ', 12, 'ascii');
+  return buffer;
 }

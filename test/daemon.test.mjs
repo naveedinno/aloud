@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import {
+  createSerializedExecutor,
+  createSingleFlight,
+  DAEMON_PROTOCOL,
+  DAEMON_SERVICE,
+  isSpeechDaemonHealth,
+  runSpeechDaemon,
+} from '../dist/daemon.js';
+import { speechBatchesForMode, speechChunkRanges } from '../dist/speak.js';
 
 const source = readFileSync(new URL('../src/daemon.ts', import.meta.url), 'utf8');
 
@@ -26,8 +37,10 @@ test('speech daemon tracks menu bar voice selection for plain reads', () => {
   assert.match(source, /currentPlayback\?\.resume\(\)/);
   assert.match(source, /request\.url === '\/settings'/);
   assert.match(source, /request\.url === '\/seek'/);
-  assert.match(source, /chunkText:/);
+  assert.doesNotMatch(source, /chunkText\?: string/);
   assert.match(source, /speechChunkRanges\(input\.text, chunks\)/);
+  assert.match(source, /const text = String\(body\.text \?\? ''\);/);
+  assert.match(source, /if \(!text\.trim\(\)\)/);
   assert.match(source, /chunkStart: range\?\.start/);
   assert.match(source, /chunkEnd: range\?\.end/);
   assert.match(source, /speechPrefetchForMode\(input\.mode\)/);
@@ -45,10 +58,161 @@ test('speech daemon keeps Kokoro model workers out of idle memory', () => {
   assert.doesNotMatch(source, /warmKokoroWorkers/);
   assert.doesNotMatch(source, /createKokoroSynthesizerSession/);
   assert.match(source, /createManagedKokoroSynthesizer\(home, \{ workers: 1 \}\)/);
-  assert.match(source, /server\.on\('close', \(\) => synthesizer\.dispose\(\)\)/);
+  assert.match(source, /synthesizer\?\.dispose\(\)/);
 });
 
 test('speech daemon finishes cancellation before starting the replacement job', () => {
   assert.match(source, /stopCurrent\(\);\s+await currentJob;/);
   assert.match(source, /if \(currentJob === job\)/);
+  assert.match(source, /if \(generation === currentGeneration\)/);
+});
+
+test('speech daemon command executor serializes overlapping mutations and recovers after errors', async () => {
+  const execute = createSerializedExecutor();
+  let active = 0;
+  let maxActive = 0;
+  const order = [];
+  const command = (name, fail = false) => execute(async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push(`start:${name}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    order.push(`end:${name}`);
+    active -= 1;
+    if (fail) throw new Error(name);
+    return name;
+  });
+
+  const results = await Promise.allSettled([command('speak'), command('seek', true), command('stop')]);
+  assert.equal(maxActive, 1);
+  assert.deepEqual(order, [
+    'start:speak', 'end:speak',
+    'start:seek', 'end:seek',
+    'start:stop', 'end:stop',
+  ]);
+  assert.deepEqual(results.map((result) => result.status), ['fulfilled', 'rejected', 'fulfilled']);
+});
+
+test('speech daemon cold start is shared by simultaneous callers', async () => {
+  let starts = 0;
+  let release;
+  const started = new Promise((resolve) => { release = resolve; });
+  const startOnce = createSingleFlight(async () => {
+    starts += 1;
+    await started;
+  });
+
+  const first = startOnce();
+  const second = startOnce();
+  assert.equal(first, second);
+  assert.equal(starts, 1);
+  release();
+  await Promise.all([first, second]);
+  await startOnce();
+  assert.equal(starts, 2);
+});
+
+test('speech daemon health requires the exact service and protocol identity', () => {
+  assert.equal(isSpeechDaemonHealth({ ok: true }), false);
+  assert.equal(isSpeechDaemonHealth({ ok: true, protocolVersion: DAEMON_PROTOCOL, service: 'another-local-service' }), false);
+  assert.equal(isSpeechDaemonHealth({ ok: true, protocolVersion: DAEMON_PROTOCOL, service: DAEMON_SERVICE }), true);
+});
+
+test('speech daemon shuts down through its scoped local endpoint', async () => {
+  const server = await runSpeechDaemon({
+    port: 0,
+    signals: false,
+    synthesize: async () => { throw new Error('not used'); },
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const closed = new Promise((resolve) => server.once('close', resolve));
+  const response = await fetch(`http://127.0.0.1:${address.port}/shutdown`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, stopped: true });
+  await closed;
+  assert.equal(server.listening, false);
+});
+
+test('speech daemon seeks from the live chunk and preserves job ownership', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-daemon-'));
+  const text = Array.from({ length: 42 }, (_, index) => `Sentence ${index + 1} has enough useful detail to form several reading chunks.`).join(' ');
+  const chunks = speechBatchesForMode(text, 'fast-start');
+  const ranges = speechChunkRanges(text, chunks);
+  assert.ok(chunks.length >= 3);
+  let playCount = 0;
+  const player = async (_path, options = {}) => {
+    playCount += 1;
+    if (playCount === 1) return;
+    await new Promise((resolve, reject) => {
+      const abort = () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' }));
+      if (options.signal?.aborted) abort();
+      else options.signal?.addEventListener('abort', abort, { once: true });
+    });
+  };
+  const server = await runSpeechDaemon({
+    home,
+    player,
+    port: 0,
+    signals: false,
+    synthesize: async (_actualHome, input) => ({
+      cached: false,
+      dir: home,
+      id: 'a'.repeat(64),
+      path: join(home, `${input.text.length}.wav`),
+      voice: 'af_heart',
+      langCode: 'a',
+      rate: 1,
+      url: `/api/tts/kokoro/${'a'.repeat(64)}.wav`,
+    }),
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const base = `http://127.0.0.1:${address.port}`;
+  const post = async (path, body, headers = {}) => {
+    const response = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    return { response, body: await response.json() };
+  };
+
+  try {
+    const rejected = await post('/speak', { text }, { Origin: 'https://example.com' });
+    assert.equal(rejected.response.status, 403);
+
+    const started = await post('/speak', { mode: 'fast-start', text });
+    assert.equal(started.response.status, 200);
+    const jobId = started.body.jobId;
+    assert.match(jobId, /^[0-9a-f-]{36}$/i);
+
+    let live;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      live = await fetch(`${base}/status`).then((response) => response.json());
+      if (live.state.chunkStart === ranges[1]?.start && live.state.status === 'reading') break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(live.state.chunkStart, ranges[1]?.start);
+
+    const next = await post('/seek', { action: 'next' });
+    assert.equal(next.response.status, 200);
+    assert.equal(next.body.jobId, jobId);
+    assert.equal(next.body.state.chunkStart, ranges[2]?.start);
+    assert.equal(next.body.canGoPrevious, true);
+
+    const replay = await post('/seek', { action: 'replay' });
+    assert.equal(replay.response.status, 200);
+    assert.equal(replay.body.jobId, jobId);
+    assert.equal(replay.body.state.chunkStart, ranges[2]?.start);
+  } finally {
+    const closed = new Promise((resolve) => server.once('close', resolve));
+    await post('/shutdown', {});
+    await closed;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

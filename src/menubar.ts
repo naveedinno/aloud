@@ -36,6 +36,8 @@ struct DaemonStatus: Decodable {
         let status: String?
     }
     let ok: Bool?
+    let protocolVersion: Int?
+    let service: String?
     let mode: String?
     let modeLabel: String?
     let paused: Bool?
@@ -66,6 +68,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private var statusMenuItem: NSMenuItem!
     private var stopMenuItem: NSMenuItem!
     private var pauseMenuItem: NSMenuItem!
+    private var pollTimer: Timer?
+    private var accessibilityTimer: Timer?
+    private var pollInFlight = false
     private var readerItems: [NSMenuItem] = []
     private var selectionMenuItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
@@ -95,9 +100,14 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         registerReadSelectionHotKey()
         reportAccessibilityTrust()
         pollStatus()
-        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.pollStatus()
+        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.reportAccessibilityTrust()
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        pollTimer?.invalidate()
+        accessibilityTimer?.invalidate()
     }
 
     private func buildMenu() {
@@ -227,11 +237,19 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     }
 
     private func pollStatus() {
-        reportAccessibilityTrust()
+        pollTimer?.invalidate()
+        pollTimer = nil
+        guard !pollInFlight else { return }
+        pollInFlight = true
         request(path: "status", method: "GET") { [weak self] data in
             guard let self else { return }
-            guard let data, let status = try? JSONDecoder().decode(DaemonStatus.self, from: data), status.ok == true else {
+            guard let data,
+                  let status = try? JSONDecoder().decode(DaemonStatus.self, from: data),
+                  status.ok == true,
+                  status.protocolVersion == 1,
+                  status.service == "kokoro-reader-speech-daemon" else {
                 DispatchQueue.main.async {
+                    self.pollInFlight = false
                     self.isRunning = false
                     self.isPaused = false
                     self.visualState = .idle
@@ -239,10 +257,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                     self.stopMenuItem.isEnabled = false
                     self.pauseMenuItem.isEnabled = false
                     self.setMenuBarIcon(state: .idle)
+                    self.scheduleStatusPoll()
                 }
                 return
             }
             DispatchQueue.main.async {
+                self.pollInFlight = false
                 self.currentRate = status.rate ?? self.currentRate
                 let nextShortcut = status.shortcut ?? self.currentShortcut
                 if nextShortcut != self.currentShortcut {
@@ -263,7 +283,16 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                     self.statusMenuItem.title = message
                 }
                 self.render()
+                self.scheduleStatusPoll()
             }
+        }
+    }
+
+    private func scheduleStatusPoll() {
+        pollTimer?.invalidate()
+        let interval = isRunning ? 0.75 : 5.0
+        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            self?.pollStatus()
         }
     }
 
@@ -482,11 +511,19 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private func request(path: String, method: String, body: Data? = nil, completion: @escaping (Data?) -> Void) {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
-        if let body {
-            request.httpBody = body
+        request.timeoutInterval = 4
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if method == "POST" {
+            request.httpBody = body ?? Data("{}".utf8)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        URLSession.shared.dataTask(with: request) { data, _, _ in
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard error == nil,
+                  let response = response as? HTTPURLResponse,
+                  (200..<300).contains(response.statusCode) else {
+                completion(nil)
+                return
+            }
             completion(data)
         }.resume()
     }

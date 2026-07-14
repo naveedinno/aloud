@@ -58,6 +58,13 @@ test('native menu bar helper talks to the lightweight daemon', () => {
   assert.match(source, /request\(path: "rate", method: "POST"/);
   assert.match(source, /request\(path: "voice", method: "POST"/);
   assert.match(source, /request\(path: "accessibility", method: "POST"/);
+  assert.match(source, /let interval = isRunning \? 0\.75 : 5\.0/);
+  assert.match(source, /withTimeInterval: 60/);
+  assert.match(source, /guard !pollInFlight else \{ return \}/);
+  assert.match(source, /request\.timeoutInterval = 4/);
+  assert.match(source, /\(200\.\.<300\)\.contains\(response\.statusCode\)/);
+  assert.match(source, /body \?\? Data\("\{\}"\.utf8\)/);
+  assert.doesNotMatch(source, /withTimeInterval: 1\.5, repeats: true/);
 });
 
 test('native menu bar helper registers a global read-selection hotkey', () => {

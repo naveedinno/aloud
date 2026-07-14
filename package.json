@@ -4,14 +4,18 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean:dist && tsc",
     "build:macos-app": "npm run build && bash scripts/build-macos-app.sh",
     "build:macos-dmg": "npm run build:macos-app && bash scripts/build-macos-dmg.sh",
-    "dev": "npm run build && node dist/cli.js",
+    "clean": "bash scripts/clean.sh",
+    "clean:dist": "bash scripts/clean.sh --dist-only",
+    "dev": "npm run build && npm run start",
     "install:macos-service": "npm run build && bash scripts/install-macos-service.sh",
     "setup:kokoro": "bash scripts/setup-kokoro.sh",
-    "start": "node dist/cli.js",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "start": "bash scripts/run-kokoro-reader.sh",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:packaging": "node --test test/macos-service-script.test.mjs test/macos-packaging-clean-room.test.mjs",
+    "uninstall:macos-service": "bash scripts/uninstall-macos-service.sh"
   },
   "engines": {
     "node": ">=20"

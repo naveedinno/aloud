@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -21,14 +22,20 @@ import {
   speechMode,
   type SpeechMode,
   type SpeechPlaybackHandle,
+  type SpeechPlayer,
   type SpeechChunkRange,
   type SpeechResult,
+  type SpeechSynthesizer,
 } from './speak.js';
 
 export const SPEECH_DAEMON_PORT = 17878;
 const DAEMON_URL = `http://127.0.0.1:${SPEECH_DAEMON_PORT}`;
 const RANDOM_VOICE = 'random';
 const DAEMON_VOICES = kokoroVoiceOptions().map((voice) => voice.id);
+const MAX_DAEMON_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_DAEMON_TEXT_CHARACTERS = 240_000;
+export const DAEMON_SERVICE = 'kokoro-reader-speech-daemon';
+export const DAEMON_PROTOCOL = 1;
 
 export interface SpeechDaemonRequest {
   batch?: boolean;
@@ -42,7 +49,6 @@ export interface SpeechDaemonRequest {
 export type SpeechDaemonState = SpeechControllerState & {
   chunkEnd?: number;
   chunkStart?: number;
-  chunkText?: string;
 };
 
 export interface SpeechDaemonStatus {
@@ -52,12 +58,15 @@ export interface SpeechDaemonStatus {
   canReplay: boolean;
   mode: SpeechMode;
   modeLabel: string;
+  jobId?: string;
   ok: true;
   paused: boolean;
   rate: number;
   running: boolean;
   shortcut: GlobalShortcut;
   shortcutLabel: string;
+  service: typeof DAEMON_SERVICE;
+  protocolVersion: typeof DAEMON_PROTOCOL;
   state: SpeechDaemonState;
   voice: string;
   voiceLabel: string;
@@ -73,15 +82,56 @@ export interface SpeechDaemonSettings {
 export type SpeechDaemonControl = 'pause' | 'resume' | 'stop';
 export type SpeechDaemonSeek = 'next' | 'previous' | 'replay';
 
-export async function runSpeechDaemon(): Promise<void> {
-  const home = homedir();
+export interface SpeechDaemonRunOptions {
+  home?: string;
+  host?: string;
+  player?: SpeechPlayer;
+  port?: number;
+  signals?: boolean;
+  synthesize?: SpeechSynthesizer;
+}
+
+export type SerializedExecutor = <T>(operation: () => Promise<T> | T) => Promise<T>;
+
+export type SingleFlightOperation<T> = () => Promise<T>;
+
+export function createSingleFlight<T>(operation: SingleFlightOperation<T>): SingleFlightOperation<T> {
+  let inFlight: Promise<T> | undefined;
+  return () => {
+    if (inFlight) return inFlight;
+    const next = operation();
+    const shared = next.finally(() => {
+      if (inFlight === shared) inFlight = undefined;
+    });
+    inFlight = shared;
+    return shared;
+  };
+}
+
+export function createSerializedExecutor(): SerializedExecutor {
+  let tail = Promise.resolve<unknown>(undefined);
+  return <T>(operation: () => Promise<T> | T): Promise<T> => {
+    const result = tail.then(operation, operation);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+}
+
+export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Promise<ReturnType<typeof createServer>> {
+  const home = options.home ?? homedir();
   const storedPreferences = loadReaderPreferences(home);
-  const synthesizer = createManagedKokoroSynthesizer(home, { workers: 1 });
-  const synthesize = (_home: string, input: Parameters<typeof synthesizer.synthesize>[0], opts?: Parameters<typeof synthesizer.synthesize>[1]) => synthesizer.synthesize(input, opts);
+  const synthesizer = options.synthesize ? undefined : createManagedKokoroSynthesizer(home, { workers: 1 });
+  const synthesize: SpeechSynthesizer = options.synthesize
+    ?? ((_home, input, opts) => synthesizer!.synthesize(input, opts));
+  const player = options.player ?? playAudio;
+  const serializeMutation = createSerializedExecutor();
   let accessibilityTrusted: boolean | undefined;
   let currentAbort: AbortController | undefined;
   let currentChunks: string[] = [];
+  let currentGeneration = 0;
+  let currentChunkIndex = 0;
   let currentJob: Promise<void> | undefined;
+  let currentJobId: string | undefined;
   let currentMode: SpeechMode = speechMode(storedPreferences.mode ?? DEFAULT_READER_PREFERENCES.mode);
   let currentPaused = false;
   let currentPlayback: SpeechPlaybackHandle | undefined;
@@ -104,7 +154,7 @@ export async function runSpeechDaemon(): Promise<void> {
   });
 
   const statusBody = (): SpeechDaemonStatus => {
-    const currentIndex = activeChunkIndex(currentState.current, currentStartAt, currentChunks.length);
+    const currentIndex = Math.max(0, Math.min(Math.max(0, currentChunks.length - 1), currentChunkIndex));
     return {
       accessibilityTrusted,
       canGoNext: currentChunks.length > 1 && currentIndex < currentChunks.length - 1,
@@ -112,12 +162,15 @@ export async function runSpeechDaemon(): Promise<void> {
       canReplay: currentChunks.length > 0,
       mode: currentMode,
       modeLabel: speechModeLabel(currentMode),
+      jobId: currentJobId,
       ok: true,
       paused: currentPaused,
       rate: currentRate,
       running: Boolean(currentAbort),
       shortcut: currentShortcut,
       shortcutLabel: globalShortcutLabel(currentShortcut),
+      service: DAEMON_SERVICE,
+      protocolVersion: DAEMON_PROTOCOL,
       state: currentState,
       voice: currentVoice,
       voiceLabel: daemonVoiceLabel(currentVoice),
@@ -125,6 +178,7 @@ export async function runSpeechDaemon(): Promise<void> {
   };
 
   const stopCurrent = () => {
+    currentGeneration += 1;
     currentPlayback?.stop();
     currentAbort?.abort();
     currentPaused = false;
@@ -146,13 +200,16 @@ export async function runSpeechDaemon(): Promise<void> {
     updateState({ message: currentAbort ? 'Reading selected text' : 'Ready' });
   };
 
-  const startJob = (input: SpeechDaemonRequest, chunks: string[], startAt = 0) => {
+  const startJob = (input: SpeechDaemonRequest, chunks: string[], startAt = 0, jobId: string = randomUUID()) => {
+    const generation = ++currentGeneration;
     const abort = new AbortController();
     const chunkRanges = speechChunkRanges(input.text, chunks);
     currentPaused = false;
     currentRequest = input;
+    currentJobId = jobId;
     currentChunks = chunks;
     currentStartAt = Math.max(0, Math.min(chunks.length - 1, startAt));
+    currentChunkIndex = currentStartAt;
     const jobInput: SpeechDaemonRequest = {
       ...input,
       mode: currentMode,
@@ -163,7 +220,6 @@ export async function runSpeechDaemon(): Promise<void> {
     updateState({
       chunkEnd: startRange?.end,
       chunkStart: startRange?.start,
-      chunkText: chunks[currentStartAt] ?? input.text,
       current: currentStartAt,
       message: chunks.length > 1 ? `Preparing chunk ${currentStartAt + 1} of ${chunks.length}` : 'Preparing selected text',
       status: 'starting',
@@ -178,9 +234,19 @@ export async function runSpeechDaemon(): Promise<void> {
       currentStartAt,
       abort,
       synthesize,
+      player,
       () => currentRate,
-      updateState,
+      (state, chunkIndex) => {
+        if (generation === currentGeneration) {
+          if (typeof chunkIndex === 'number') currentChunkIndex = chunkIndex;
+          updateState(state);
+        }
+      },
       (handle) => {
+        if (generation !== currentGeneration) {
+          handle?.stop();
+          return;
+        }
         currentPlayback = handle;
         if (currentPaused) currentPlayback?.pause();
       },
@@ -188,18 +254,22 @@ export async function runSpeechDaemon(): Promise<void> {
     currentJob = job;
     void job.finally(() => {
       if (currentJob === job) {
-        currentPaused = false;
-        currentPlayback = undefined;
-        currentAbort = undefined;
         currentJob = undefined;
+        if (generation === currentGeneration) {
+          currentPaused = false;
+          currentPlayback = undefined;
+          currentAbort = undefined;
+        }
       }
     });
   };
 
   const server = createServer(async (request, response) => {
     try {
+      const requestError = daemonRequestError(request);
+      if (requestError) return sendJson(response, { error: requestError.message, ok: false }, requestError.status);
       if (request.method === 'GET' && request.url === '/health') {
-        return sendJson(response, { ok: true });
+        return sendJson(response, { ok: true, protocolVersion: DAEMON_PROTOCOL, service: DAEMON_SERVICE });
       }
       if (request.method === 'GET' && request.url === '/status') {
         return sendJson(response, statusBody());
@@ -245,62 +315,114 @@ export async function runSpeechDaemon(): Promise<void> {
         return sendJson(response, statusBody());
       }
       if (request.method === 'POST' && request.url === '/stop') {
-        stopCurrent();
-        return sendJson(response, { ok: true, stopped: true });
+        await readJson<Record<string, never>>(request);
+        return await serializeMutation(() => {
+          stopCurrent();
+          return sendJson(response, { ok: true, stopped: true });
+        });
+      }
+      if (request.method === 'POST' && request.url === '/shutdown') {
+        await readJson<Record<string, never>>(request);
+        return await serializeMutation(async () => {
+          stopCurrent();
+          await currentJob;
+          response.setHeader('Connection', 'close');
+          response.once('finish', () => closeDaemonServer(server));
+          return sendJson(response, { ok: true, stopped: true });
+        });
       }
       if (request.method === 'POST' && request.url === '/pause') {
-        pauseCurrent();
-        return sendJson(response, { ok: true, paused: currentPaused });
+        await readJson<Record<string, never>>(request);
+        return await serializeMutation(() => {
+          pauseCurrent();
+          return sendJson(response, { ok: true, paused: currentPaused });
+        });
       }
       if (request.method === 'POST' && request.url === '/resume') {
-        resumeCurrent();
-        return sendJson(response, { ok: true, paused: currentPaused });
+        await readJson<Record<string, never>>(request);
+        return await serializeMutation(() => {
+          resumeCurrent();
+          return sendJson(response, { ok: true, paused: currentPaused });
+        });
       }
       if (request.method === 'POST' && request.url === '/seek') {
         const body = await readJson<{ action?: SpeechDaemonSeek }>(request);
-        if (!currentRequest || currentChunks.length === 0) {
-          return sendJson(response, { error: 'Nothing is available to navigate.', ok: false }, 409);
+        if (!body.action || !['next', 'previous', 'replay'].includes(body.action)) {
+          return sendJson(response, { error: 'Unknown navigation action.', ok: false }, 400);
         }
-        const currentIndex = activeChunkIndex(currentState.current, currentStartAt, currentChunks.length);
-        const target = seekTarget(body.action, currentIndex, currentChunks.length);
-        stopCurrent();
-        await currentJob;
-        startJob(currentRequest, currentChunks, target);
-        return sendJson(response, statusBody());
+        return await serializeMutation(async () => {
+          if (!currentRequest || currentChunks.length === 0) {
+            return sendJson(response, { error: 'Nothing is available to navigate.', ok: false }, 409);
+          }
+          const requestToReplay = currentRequest;
+          const chunksToReplay = currentChunks;
+          const jobIdToReplay = currentJobId ?? randomUUID();
+          const currentIndex = currentChunkIndex;
+          const target = seekTarget(body.action, currentIndex, currentChunks.length);
+          stopCurrent();
+          await currentJob;
+          startJob(requestToReplay, chunksToReplay, target, jobIdToReplay);
+          return sendJson(response, statusBody());
+        });
       }
       if (request.method === 'POST' && request.url === '/speak') {
         const body = await readJson<SpeechDaemonRequest>(request);
-        const text = String(body.text ?? '').trim();
-        if (!text) return sendJson(response, { error: 'No text to speak.', ok: false }, 400);
+        const text = String(body.text ?? '');
+        if (!text.trim()) return sendJson(response, { error: 'No text to speak.', ok: false }, 400);
+        if (text.length > MAX_DAEMON_TEXT_CHARACTERS) {
+          return sendJson(response, { error: `Text is too long (${MAX_DAEMON_TEXT_CHARACTERS} characters max).`, ok: false }, 413);
+        }
 
-        stopCurrent();
-        await currentJob;
-        currentMode = speechMode(body.mode ?? currentMode);
-        currentRate = kokoroRate(body.rate ?? currentRate);
-        currentVoice = normalizeDaemonVoice(body.voice ?? currentVoice);
-        currentShortcut = normalizeGlobalShortcut(currentShortcut);
-        persistPreferences();
-        const chunks = body.batch === false ? [text] : speechBatchesForMode(text, currentMode);
-        startJob({ ...body, text }, chunks, 0);
-        return sendJson(response, statusBody());
+        return await serializeMutation(async () => {
+          stopCurrent();
+          await currentJob;
+          currentMode = speechMode(body.mode ?? currentMode);
+          currentRate = kokoroRate(body.rate ?? currentRate);
+          currentVoice = normalizeDaemonVoice(body.voice ?? currentVoice);
+          currentShortcut = normalizeGlobalShortcut(currentShortcut);
+          persistPreferences();
+          const chunks = body.batch === false ? [text] : speechBatchesForMode(text, currentMode);
+          startJob({ ...body, text }, chunks, 0);
+          return sendJson(response, statusBody());
+        });
       }
       response.writeHead(404).end();
     } catch (err) {
-      sendJson(response, { error: (err as Error).message, ok: false }, 500);
+      sendJson(response, { error: (err as Error).message, ok: false }, httpStatus(err));
     }
   });
 
-  server.listen(SPEECH_DAEMON_PORT, '127.0.0.1');
-  server.on('close', () => synthesizer.dispose());
+  const removeSignalHandlers = options.signals === false
+    ? () => {}
+    : installDaemonSignalCleanup(server, stopCurrent);
+  server.on('close', () => {
+    removeSignalHandlers();
+    stopCurrent();
+    synthesizer?.dispose();
+  });
+  await listen(server, options.port ?? SPEECH_DAEMON_PORT, options.host ?? '127.0.0.1');
+  return server;
 }
 
-export async function sendSpeakToDaemon(input: SpeechDaemonRequest): Promise<void> {
+export async function sendSpeakToDaemon(input: SpeechDaemonRequest): Promise<SpeechDaemonStatus> {
   await ensureSpeechDaemon();
-  await postJson('/speak', input);
+  return await postJson('/speak', input) as SpeechDaemonStatus;
 }
 
 export async function stopSpeechDaemonPlayback(): Promise<void> {
+  if (!await daemonHealthy()) return;
   await postJson('/stop', {});
+}
+
+export async function shutdownSpeechDaemon(): Promise<boolean> {
+  if (!await daemonHealthy()) return false;
+  try {
+    await postJson('/shutdown', {});
+    return true;
+  } catch (err) {
+    if (['ECONNREFUSED', 'ECONNRESET'].includes(String((err as NodeJS.ErrnoException).code ?? ''))) return false;
+    throw err;
+  }
 }
 
 export async function getSpeechDaemonStatus(): Promise<SpeechDaemonStatus> {
@@ -331,8 +453,9 @@ async function speakDaemonJob(
   startAt: number,
   abort: AbortController,
   synthesize: Parameters<typeof speakText>[0]['synthesize'],
+  player: SpeechPlayer,
   rate: () => number,
-  updateState: (state: Partial<SpeechDaemonState>) => void,
+  updateState: (state: Partial<SpeechDaemonState>, chunkIndex?: number) => void,
   onPlaybackHandle: (handle: SpeechPlaybackHandle | undefined) => void,
 ): Promise<void> {
   try {
@@ -344,14 +467,14 @@ async function speakDaemonJob(
       onPlaybackHandle,
       onProgress: (progress) => {
         const range = chunkRanges[progress.index];
-        const { index: _index, ...state } = progress;
+        const { chunkText: _chunkText, index: _index, ...state } = progress;
         updateState({
           ...state,
           chunkEnd: range?.end,
           chunkStart: range?.start,
-        });
+        }, progress.index);
       },
-      player: playAudio,
+      player,
       playbackRate: rate,
       prefetch: input.prefetch ?? speechPrefetchForMode(input.mode),
       rate: 1,
@@ -370,8 +493,18 @@ async function speakDaemonJob(
   }
 }
 
+const ensureSpeechDaemonStarted = createSingleFlight(startSpeechDaemon);
+
 async function ensureSpeechDaemon(): Promise<void> {
-  if (await daemonHealthy()) return;
+  await ensureSpeechDaemonStarted();
+}
+
+async function startSpeechDaemon(): Promise<void> {
+  const existingHealth = await daemonHealthResponse();
+  if (isSpeechDaemonHealth(existingHealth)) return;
+  if (existingHealth !== undefined) {
+    throw new Error('An older or incompatible Kokoro Reader daemon is running. Restart Services from Mac connection to upgrade it safely.');
+  }
   const cliPath = process.argv[1];
   const child = spawn(process.execPath, [cliPath, 'daemon'], {
     detached: true,
@@ -387,12 +520,21 @@ async function ensureSpeechDaemon(): Promise<void> {
 }
 
 async function daemonHealthy(): Promise<boolean> {
+  return isSpeechDaemonHealth(await daemonHealthResponse());
+}
+
+async function daemonHealthResponse(): Promise<unknown | undefined> {
   try {
-    await getJson('/health');
-    return true;
+    return await getJson('/health');
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+export function isSpeechDaemonHealth(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const health = value as { ok?: boolean; protocolVersion?: number; service?: string };
+  return health.ok === true && health.protocolVersion === DAEMON_PROTOCOL && health.service === DAEMON_SERVICE;
 }
 
 function getJson(path: string): Promise<unknown> {
@@ -417,10 +559,15 @@ function daemonRequest(method: 'GET' | 'POST', path: string, body?: unknown): Pr
       const chunks: Buffer[] = [];
       response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
       response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        const json = text ? JSON.parse(text) as { error?: string; ok?: boolean } : {};
-        if ((response.statusCode ?? 500) >= 400 || json.ok === false) reject(new Error(json.error ?? `Daemon request failed with status ${response.statusCode}.`));
-        else resolve(json);
+        try {
+          const text = Buffer.concat(chunks).toString('utf8');
+          if (!text) throw new Error('Kokoro speech daemon returned an empty response.');
+          const json = JSON.parse(text) as { error?: string; ok?: boolean };
+          if ((response.statusCode ?? 500) >= 400 || json.ok === false) reject(new Error(json.error ?? `Daemon request failed with status ${response.statusCode}.`));
+          else resolve(json);
+        } catch (err) {
+          reject(err);
+        }
       });
     });
     request.on('error', reject);
@@ -435,24 +582,138 @@ function daemonRequest(method: 'GET' | 'POST', path: string, body?: unknown): Pr
 function readJson<T>(request: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
+    let bytes = 0;
+    let settled = false;
+    const declaredLength = Number(request.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_DAEMON_BODY_BYTES) {
+      request.resume();
+      reject(new DaemonHttpError(413, `Request body exceeds the ${MAX_DAEMON_BODY_BYTES}-byte limit.`));
+      return;
+    }
+    request.on('data', (chunk) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      bytes += buffer.length;
+      if (bytes > MAX_DAEMON_BODY_BYTES) {
+        settled = true;
+        chunks.length = 0;
+        reject(new DaemonHttpError(413, `Request body exceeds the ${MAX_DAEMON_BODY_BYTES}-byte limit.`));
+        return;
+      }
+      chunks.push(buffer);
+    });
     request.on('end', () => {
+      if (settled) return;
+      settled = true;
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as T);
-      } catch (err) {
+      } catch {
+        reject(new DaemonHttpError(400, 'invalid JSON'));
+      }
+    });
+    request.on('error', (err) => {
+      if (!settled) {
+        settled = true;
         reject(err);
       }
     });
-    request.on('error', reject);
   });
 }
 
 function sendJson(response: ServerResponse, body: unknown, status = 200): void {
+  if (response.writableEnded) return;
   response.writeHead(status, {
     'Cache-Control': 'no-store',
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(body));
+}
+
+class DaemonHttpError extends Error {
+  constructor(readonly statusCode: number, message: string) {
+    super(message);
+    this.name = 'DaemonHttpError';
+  }
+}
+
+function daemonRequestError(request: IncomingMessage): { message: string; status: number } | undefined {
+  const host = request.headers.host;
+  if (!host || !isLocalAuthority(host)) return { message: 'Only local requests are allowed.', status: 403 };
+  if (request.method !== 'POST') return undefined;
+  const fetchSite = request.headers['sec-fetch-site'];
+  if (fetchSite && fetchSite !== 'same-origin') return { message: 'Cross-site requests are not allowed.', status: 403 };
+  const originValue = request.headers.origin;
+  if (originValue) {
+    try {
+      const origin = new URL(originValue);
+      if (origin.protocol !== 'http:' || !isLocalAuthority(origin.host) || origin.host.toLowerCase() !== host.toLowerCase()) {
+        return { message: 'The request origin is not allowed.', status: 403 };
+      }
+    } catch {
+      return { message: 'The request origin is not allowed.', status: 403 };
+    }
+  }
+  const contentType = String(request.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    return { message: 'POST requests require Content-Type: application/json.', status: 415 };
+  }
+  return undefined;
+}
+
+function isLocalAuthority(value: string): boolean {
+  try {
+    const hostname = new URL(`http://${value}`).hostname.toLowerCase().replace(/\.$/, '');
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+function httpStatus(error: unknown): number {
+  const status = Number((error as { statusCode?: number } | undefined)?.statusCode);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
+}
+
+function listen(server: ReturnType<typeof createServer>, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => reject(err);
+    server.once('error', onError);
+    server.listen(port, host, () => {
+      server.removeListener('error', onError);
+      resolve();
+    });
+  });
+}
+
+function installDaemonSignalCleanup(server: ReturnType<typeof createServer>, stop: () => void): () => void {
+  let forceTimer: ReturnType<typeof setTimeout> | undefined;
+  let removed = false;
+  const shutdown = () => {
+    stop();
+    server.close();
+    server.closeIdleConnections();
+    forceTimer ??= setTimeout(() => server.closeAllConnections(), 3000);
+    forceTimer.unref?.();
+  };
+  const remove = () => {
+    if (removed) return;
+    removed = true;
+    if (forceTimer) clearTimeout(forceTimer);
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  return remove;
+}
+
+function closeDaemonServer(server: ReturnType<typeof createServer>): void {
+  if (!server.listening) return;
+  server.close();
+  server.closeIdleConnections();
+  const forceTimer = setTimeout(() => server.closeAllConnections(), 3000);
+  forceTimer.unref?.();
+  server.once('close', () => clearTimeout(forceTimer));
 }
 
 function delay(ms: number): Promise<void> {
@@ -480,12 +741,6 @@ function speechModeLabel(mode: SpeechMode): string {
 
 function doneMessage(result: SpeechResult): string {
   return result.cached ? 'Finished from cache' : 'Finished reading';
-}
-
-function activeChunkIndex(current: number | undefined, startAt: number, total: number): number {
-  if (total <= 0) return 0;
-  const index = typeof current === 'number' && current > 0 ? current - 1 : startAt;
-  return Math.max(0, Math.min(total - 1, index));
 }
 
 function seekTarget(action: SpeechDaemonSeek | undefined, current: number, total: number): number {

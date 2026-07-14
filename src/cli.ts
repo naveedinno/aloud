@@ -2,7 +2,7 @@
 import { serve } from './server.js';
 import { parseSpeakArgs, readStdin, speakText } from './speak.js';
 import { prepareNativeSpeechOverlay, startSpeechController } from './controller.js';
-import { runSpeechDaemon, sendSpeakToDaemon, stopSpeechDaemonPlayback } from './daemon.js';
+import { runSpeechDaemon, sendSpeakToDaemon, shutdownSpeechDaemon, stopSpeechDaemonPlayback } from './daemon.js';
 import { prepareNativeMenuBar, startNativeMenuBar } from './menubar.js';
 
 interface Args {
@@ -80,6 +80,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (argv[0] === 'shutdown-daemon') {
+    await shutdownSpeechDaemon();
+    return;
+  }
+
   if (argv[0] === 'prepare-controller') {
     prepareNativeSpeechOverlay();
     return;
@@ -116,6 +121,7 @@ async function main(): Promise<void> {
 
     const abort = new AbortController();
     let currentRate = args.rate;
+    let controllerCloseDelay = 1800;
     const controller = args.controller ? await startSpeechController({
       initialRate: currentRate,
       onRate: (rate) => {
@@ -140,6 +146,7 @@ async function main(): Promise<void> {
       console.log(`kokoro-reader spoke ${result.cached ? 'cached' : 'generated'} audio with ${result.voice} at ${currentRate}x.`);
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
+        controllerCloseDelay = 3600;
         controller?.update({ message: 'Stopped', status: 'stopped' });
         console.log('kokoro-reader stopped.');
         return;
@@ -148,9 +155,10 @@ async function main(): Promise<void> {
         message: (err as Error).message,
         status: 'error',
       });
+      controllerCloseDelay = 6000;
       throw err;
     } finally {
-      controller?.close(1800);
+      controller?.close(controllerCloseDelay);
     }
     return;
   }

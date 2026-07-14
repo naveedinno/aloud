@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
@@ -40,6 +41,7 @@ const WINDOW_Y = 112;
 const OVERLAY_WIDTH = 416;
 const OVERLAY_HEIGHT = 136;
 const OVERLAY_RADIUS = 18;
+const CONTROLLER_BODY_LIMIT_BYTES = 4_096;
 const NATIVE_OVERLAY_SWIFT = String.raw`import AppKit
 import Foundation
 
@@ -65,11 +67,14 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var progressBar: NSView!
     private var speedTray: NSView!
     private var stopButton: NSButton!
+    private var retryButton: NSButton!
     private var speedButtons: [NSButton] = []
     private var activityDot: NSView!
     private let speedRates: [Double] = [0.8, 1.0, 1.25]
     private var doneTimer: Timer?
     private var failedPolls = 0
+    private var pollInFlight = false
+    private var connectionLost = false
 
     init(baseURL: URL) {
         self.baseURL = baseURL
@@ -83,7 +88,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         buildPanel()
         poll()
-        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.poll()
         }
     }
@@ -110,6 +115,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         panel.isMovableByWindowBackground = true
         panel.isOpaque = false
         panel.level = .floating
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.setAccessibilityLabel("Kokoro Reader playback controller")
         panel.orderFrontRegardless()
 
         let root = NSView(frame: NSRect(x: 0, y: 0, width: ${OVERLAY_WIDTH}, height: ${OVERLAY_HEIGHT}))
@@ -146,11 +153,20 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         messageLabel = label("Preparing selected text", x: 18, y: 79, width: 288, height: 18, size: 12, weight: .regular, color: NSColor.white.withAlphaComponent(0.66))
         statusLabel = label("Starting", x: 38, y: 14, width: 150, height: 16, size: 11, weight: .medium, color: NSColor.white.withAlphaComponent(0.58))
         countLabel = label("", x: 346, y: 14, width: 52, height: 16, size: 11, weight: .medium, color: NSColor.white.withAlphaComponent(0.58), alignment: .right)
+        messageLabel.setAccessibilityLabel("Playback message")
+        statusLabel.setAccessibilityLabel("Playback status")
+        countLabel.setAccessibilityLabel("Reading position")
 
         progressTrack = NSView(frame: NSRect(x: 18, y: 66, width: ${OVERLAY_WIDTH - 36}, height: 5))
         progressTrack.wantsLayer = true
         progressTrack.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
         progressTrack.layer?.cornerRadius = 2.5
+        progressTrack.setAccessibilityElement(true)
+        progressTrack.setAccessibilityRole(.progressIndicator)
+        progressTrack.setAccessibilityLabel("Reading progress")
+        progressTrack.setAccessibilityMinValue(0)
+        progressTrack.setAccessibilityMaxValue(100)
+        progressTrack.setAccessibilityValue(8)
 
         progressBar = NSView(frame: NSRect(x: 0, y: 0, width: 28, height: 5))
         progressBar.wantsLayer = true
@@ -176,6 +192,23 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         stopButton.layer?.cornerRadius = 8
         stopButton.contentTintColor = .white
         stopButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        stopButton.setAccessibilityLabel("Stop reading")
+
+        retryButton = NSButton(frame: NSRect(x: 256, y: 90, width: 68, height: 28))
+        retryButton.title = "Retry"
+        retryButton.target = self
+        retryButton.action = #selector(retryConnection)
+        retryButton.bezelStyle = .regularSquare
+        retryButton.isBordered = false
+        retryButton.wantsLayer = true
+        retryButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        retryButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        retryButton.layer?.borderWidth = 0.5
+        retryButton.layer?.cornerRadius = 8
+        retryButton.contentTintColor = .white
+        retryButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        retryButton.setAccessibilityLabel("Retry local reader connection")
+        retryButton.isHidden = true
 
         activityDot = NSView(frame: NSRect(x: 22, y: 19, width: 6, height: 6))
         activityDot.wantsLayer = true
@@ -195,6 +228,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         blur.addSubview(speedTray, positioned: .below, relativeTo: speedButtons.first)
         blur.addSubview(statusLabel)
         blur.addSubview(countLabel)
+        blur.addSubview(retryButton)
         blur.addSubview(stopButton)
     }
 
@@ -224,6 +258,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         button.wantsLayer = true
         button.layer?.cornerRadius = 7
         button.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        button.setAccessibilityLabel("Reading speed \(title)")
+        button.setAccessibilityHelp("Changes speech speed to \(title)")
         return button
     }
 
@@ -258,7 +294,22 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             }
             button.layer?.borderWidth = 0.5
             button.contentTintColor = isSelected ? .white : NSColor.white.withAlphaComponent(0.68)
+            button.setAccessibilityValue(isSelected ? "Selected" : "Not selected")
         }
+    }
+
+    @objc private func retryConnection() {
+        failedPolls = 0
+        connectionLost = false
+        retryButton.isHidden = true
+        messageLabel.frame.size.width = 288
+        messageLabel.stringValue = "Trying to reconnect to the local reader"
+        statusLabel.stringValue = "Connecting"
+        stopButton.title = "Close"
+        stopButton.setAccessibilityLabel("Close playback controller")
+        speedButtons.forEach { $0.isEnabled = false }
+        startAnimation(status: "starting")
+        poll()
     }
 
     @objc private func stopOrClose() {
@@ -279,31 +330,62 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private func poll() {
+        if pollInFlight { return }
+        pollInFlight = true
         URLSession.shared.dataTask(with: stateURL) { [weak self] data, _, error in
             guard let self else { return }
-            if error != nil || data == nil {
-                DispatchQueue.main.async {
-                    self.failedPolls += 1
-                    if self.failedPolls > 8 { NSApp.terminate(nil) }
+            DispatchQueue.main.async {
+                self.pollInFlight = false
+                guard error == nil, let data else {
+                    self.handlePollFailure()
+                    return
                 }
-                return
-            }
-            do {
-                let state = try JSONDecoder().decode(ControllerState.self, from: data!)
-                DispatchQueue.main.async {
+                do {
+                    let state = try JSONDecoder().decode(ControllerState.self, from: data)
                     self.failedPolls = 0
                     self.render(state)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.failedPolls += 1
-                    if self.failedPolls > 8 { NSApp.terminate(nil) }
+                } catch {
+                    self.handlePollFailure()
                 }
             }
         }.resume()
     }
 
+    private func handlePollFailure() {
+        failedPolls += 1
+        if failedPolls >= 4 { renderConnectionLost() }
+    }
+
+    private func renderConnectionLost() {
+        let shouldAnnounce = !connectionLost
+        connectionLost = true
+        messageLabel.frame.size.width = 225
+        messageLabel.stringValue = "The playback controller lost its local connection."
+        statusLabel.stringValue = "Connection lost"
+        countLabel.stringValue = ""
+        progressBar.frame.size.width = 0
+        progressBar.layer?.backgroundColor = NSColor(red: 0.86, green: 0.36, blue: 0.32, alpha: 0.95).cgColor
+        progressTrack.setAccessibilityValue(0)
+        progressTrack.setAccessibilityHelp("Reading progress is unavailable while disconnected")
+        retryButton.isHidden = false
+        retryButton.isEnabled = true
+        stopButton.title = "Close"
+        stopButton.setAccessibilityLabel("Close playback controller")
+        stopButton.isEnabled = true
+        speedButtons.forEach { $0.isEnabled = false }
+        stopAnimation()
+        if shouldAnnounce {
+            NSAccessibility.post(element: statusLabel!, notification: .valueChanged)
+        }
+    }
+
     private func render(_ state: ControllerState) {
+        let previousMessage = messageLabel.stringValue
+        let previousStatus = statusLabel.stringValue
+        connectionLost = false
+        retryButton.isHidden = true
+        speedButtons.forEach { $0.isEnabled = true }
+        messageLabel.frame.size.width = 288
         messageLabel.stringValue = state.message ?? ""
         statusLabel.stringValue = state.status.prefix(1).uppercased() + state.status.dropFirst()
         renderSpeed(state.rate ?? 1.0)
@@ -314,17 +396,28 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
         let ratio = total > 0 ? max(0.08, min(1, Double(current) / Double(total))) : 0.08
         progressBar.frame.size.width = CGFloat(ratio) * progressTrack.bounds.width
+        progressTrack.setAccessibilityValue(Int(round(ratio * 100)))
+        progressTrack.setAccessibilityHelp(total > 0 ? "Reading chunk \(min(current, total)) of \(total)" : "Preparing reading")
+        countLabel.setAccessibilityValue(countLabel.stringValue)
+        if messageLabel.stringValue != previousMessage {
+            NSAccessibility.post(element: messageLabel!, notification: .valueChanged)
+        }
+        if statusLabel.stringValue != previousStatus {
+            NSAccessibility.post(element: statusLabel!, notification: .valueChanged)
+        }
 
         if state.status == "error" {
             progressBar.layer?.backgroundColor = NSColor(red: 0.86, green: 0.36, blue: 0.32, alpha: 0.95).cgColor
             stopAnimation()
+            queueClose(after: 5.5)
         } else if state.status == "done" {
             progressBar.layer?.backgroundColor = NSColor(red: 0.42, green: 0.86, blue: 0.50, alpha: 0.95).cgColor
             stopAnimation()
-            queueClose()
+            queueClose(after: 1.4)
         } else if state.status == "stopped" {
             progressBar.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.24).cgColor
             stopAnimation()
+            queueClose(after: 3.2)
         } else {
             progressBar.layer?.backgroundColor = NSColor(red: 0.42, green: 0.86, blue: 0.78, alpha: 0.95).cgColor
             startAnimation(status: state.status)
@@ -332,6 +425,13 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
         if state.status == "stopped" || state.status == "done" || state.status == "error" {
             stopButton.title = "Close"
+            stopButton.setAccessibilityLabel("Close playback controller")
+            stopButton.isEnabled = true
+        } else {
+            doneTimer?.invalidate()
+            doneTimer = nil
+            stopButton.title = "Stop"
+            stopButton.setAccessibilityLabel("Stop reading")
             stopButton.isEnabled = true
         }
     }
@@ -353,9 +453,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         activityDot.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.34).cgColor
     }
 
-    private func queueClose() {
+    private func queueClose(after seconds: TimeInterval) {
         if doneTimer != nil { return }
-        doneTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+        doneTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
             NSApp.terminate(nil)
         }
     }
@@ -375,11 +475,17 @@ export async function startSpeechController(options: SpeechControllerOptions): P
   let state: SpeechControllerState = { ...DEFAULT_STATE, rate: kokoroRate(options.initialRate) };
   let stopped = false;
   let closeTimer: NodeJS.Timeout | undefined;
+  const capability = randomBytes(24).toString('base64url');
+  const basePath = `/${capability}/`;
 
   const server = createServer(async (request, response) => {
-    if (request.method === 'GET' && request.url === '/') return sendHtml(response);
-    if (request.method === 'GET' && request.url === '/state') return sendJson(response, state);
-    if (request.method === 'POST' && request.url === '/rate') {
+    const requestError = localControllerRequestError(request);
+    if (requestError) return sendJson(response, { error: requestError.message, ok: false }, requestError.status);
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (request.method === 'GET' && pathname === basePath) return sendHtml(response);
+    if (request.method === 'GET' && pathname === `${basePath}state`) return sendJson(response, state);
+    if (request.method === 'POST' && pathname === `${basePath}rate`) {
+      if (!isJsonRequest(request)) return sendJson(response, { error: 'Expected application/json.', ok: false }, 415);
       try {
         const body = await readJson<{ rate?: number }>(request);
         const rate = kokoroRate(body.rate);
@@ -387,10 +493,10 @@ export async function startSpeechController(options: SpeechControllerOptions): P
         options.onRate?.(rate);
         return sendJson(response, state);
       } catch (err) {
-        return sendJson(response, { error: (err as Error).message, ok: false }, 400);
+        return sendJson(response, { error: (err as Error).message, ok: false }, errorStatus(err));
       }
     }
-    if (request.method === 'POST' && request.url === '/stop') {
+    if (request.method === 'POST' && pathname === `${basePath}stop`) {
       if (!stopped) {
         stopped = true;
         state = { ...state, message: 'Stopping playback', status: 'stopped' };
@@ -401,7 +507,8 @@ export async function startSpeechController(options: SpeechControllerOptions): P
     response.writeHead(404).end();
   });
 
-  const url = await listenLocal(server);
+  const origin = await listenLocal(server);
+  const url = `${origin}${basePath}`;
   const controller: SpeechController = {
     close(afterMs = 0) {
       if (closeTimer) clearTimeout(closeTimer);
@@ -562,6 +669,9 @@ export function speechControllerHtml(): string {
       color: #aeb7b6;
       box-shadow: none;
     }
+    button[hidden] { display: none; }
+    .actions { display: flex; gap: 7px; }
+    #retry { color: #eef4f1; background: #343b39; }
     .controls {
       display: flex;
       align-items: center;
@@ -628,67 +738,117 @@ export function speechControllerHtml(): string {
     <div class="top">
       <div>
         <h1>Kokoro Reader</h1>
-        <div id="message">Preparing selected text</div>
+        <div id="message" role="status" aria-live="polite">Preparing selected text</div>
       </div>
-      <button id="stop" type="button">Stop</button>
+      <div class="actions">
+        <button id="retry" type="button" hidden>Retry</button>
+        <button id="stop" type="button">Stop</button>
+      </div>
     </div>
-    <div class="meter" aria-hidden="true"><div id="bar"></div></div>
+    <div class="meter" role="progressbar" aria-label="Reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="8" aria-valuetext="Preparing reading"><div id="bar"></div></div>
     <div class="controls">
-      <div class="speed" aria-label="Speech speed">
-        <button type="button" data-rate="0.8">0.8x</button>
-        <button type="button" data-rate="1">1x</button>
-        <button type="button" data-rate="1.25">1.25x</button>
+      <div class="speed" role="group" aria-label="Speech speed">
+        <button type="button" data-rate="0.8" aria-pressed="false" aria-label="Reading speed 0.8x">0.8x</button>
+        <button type="button" data-rate="1" aria-pressed="true" aria-label="Reading speed 1x">1x</button>
+        <button type="button" data-rate="1.25" aria-pressed="false" aria-label="Reading speed 1.25x">1.25x</button>
       </div>
-      <div id="detail"><span id="status"><span class="status-dot"></span>Starting</span><span id="count"></span></div>
+      <div id="detail"><span id="status" aria-live="polite"><span class="status-dot"></span>Starting</span><span id="count" aria-label="Reading position"></span></div>
     </div>
   </main>
   <script>
     const stop = document.getElementById('stop');
+    const retry = document.getElementById('retry');
     const message = document.getElementById('message');
     const statusLabel = document.getElementById('status');
     const count = document.getElementById('count');
     const bar = document.getElementById('bar');
+    const meter = document.querySelector('.meter');
     const rateButtons = Array.from(document.querySelectorAll('[data-rate]'));
     let closeQueued = false;
+    let refreshInFlight = false;
 
     function titleCase(value) {
       return String(value || 'starting').replace(/^./, (c) => c.toUpperCase());
     }
 
+    function renderStatusLabel(value) {
+      const dot = document.createElement('span');
+      dot.className = 'status-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      statusLabel.replaceChildren(dot, document.createTextNode(titleCase(value)));
+    }
+
     function render(state) {
+      retry.hidden = true;
+      rateButtons.forEach((button) => { button.disabled = false; });
       message.textContent = state.message || '';
-      statusLabel.innerHTML = '<span class="status-dot"></span>' + titleCase(state.status);
+      renderStatusLabel(state.status);
       const total = Number(state.total || 0);
       const current = Number(state.current || 0);
       count.textContent = total > 1 ? Math.min(current, total) + ' / ' + total : '';
       const rate = Number(state.rate || 1);
-      rateButtons.forEach((button) => button.classList.toggle('is-active', Math.abs(Number(button.dataset.rate) - rate) < 0.01));
+      rateButtons.forEach((button) => {
+        const selected = Math.abs(Number(button.dataset.rate) - rate) < 0.01;
+        button.classList.toggle('is-active', selected);
+        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      });
       const percent = total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 8;
       bar.style.width = percent + '%';
+      meter.setAttribute('aria-valuenow', String(percent));
+      meter.setAttribute('aria-valuetext', total > 0 ? 'Reading chunk ' + Math.min(current, total) + ' of ' + total : 'Preparing reading');
       bar.style.background = state.status === 'error' ? '#d66b61' : state.status === 'done' ? '#58c47d' : '#58c4b7';
       if (state.status === 'stopped' || state.status === 'done' || state.status === 'error') {
         stop.textContent = 'Close';
-        if (!closeQueued && state.status === 'done') {
+        if (!closeQueued) {
           closeQueued = true;
-          setTimeout(() => window.close(), 1400);
+          const closeDelay = state.status === 'done' ? 1400 : state.status === 'stopped' ? 3200 : 5500;
+          setTimeout(() => window.close(), closeDelay);
         }
+      } else {
+        stop.textContent = 'Stop';
       }
+    }
+
+    function renderConnectionLost() {
+      message.textContent = 'The playback controller lost its local connection.';
+      statusLabel.textContent = 'Connection lost';
+      count.textContent = '';
+      bar.style.width = '0%';
+      bar.style.background = '#d66b61';
+      meter.setAttribute('aria-valuenow', '0');
+      meter.setAttribute('aria-valuetext', 'Reading progress unavailable while disconnected');
+      retry.hidden = false;
+      stop.textContent = 'Close';
+      stop.disabled = false;
+      rateButtons.forEach((button) => { button.disabled = true; });
     }
 
     async function refresh() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
-        const response = await fetch('/state', { cache: 'no-store' });
+        const response = await fetch('state', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Connection failed');
         render(await response.json());
       } catch {
-        statusLabel.textContent = 'Closed';
+        renderConnectionLost();
+      } finally {
+        refreshInFlight = false;
       }
     }
 
+    retry.addEventListener('click', () => {
+      retry.hidden = true;
+      message.textContent = 'Trying to reconnect to the local reader';
+      statusLabel.textContent = 'Connecting';
+      refresh();
+    });
+
     stop.addEventListener('click', async () => {
-      if (stop.textContent === 'Close') window.close();
+      if (stop.textContent === 'Close') { window.close(); return; }
       stop.disabled = true;
       stop.textContent = 'Stopping';
-      try { await fetch('/stop', { method: 'POST' }); } catch {}
+      try { await fetch('stop', { method: 'POST' }); } catch {}
       stop.disabled = false;
       await refresh();
     });
@@ -697,12 +857,13 @@ export function speechControllerHtml(): string {
         const rate = Number(button.dataset.rate || 1);
         rateButtons.forEach((item) => item.classList.toggle('is-active', item === button));
         try {
-          await fetch('/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rate }) });
+          await fetch('rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rate }) });
         } catch {}
         await refresh();
       });
     });
-    setInterval(refresh, 250);
+    setInterval(() => { if (!document.hidden) refresh(); }, 500);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
     refresh();
   </script>
 </body>
@@ -747,11 +908,59 @@ function sendJson(response: ServerResponse, value: unknown, status = 200): void 
   response.end(JSON.stringify(value));
 }
 
+function localControllerRequestError(request: IncomingMessage): { message: string; status: number } | undefined {
+  const port = request.socket.localPort;
+  const host = String(request.headers.host ?? '').trim().toLowerCase();
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  if (!allowedHosts.has(host)) return { message: 'Kokoro Reader only accepts local controller requests.', status: 403 };
+
+  const origin = String(request.headers.origin ?? '').trim();
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      if (parsed.protocol !== 'http:' || parsed.host.toLowerCase() !== host) {
+        return { message: 'Cross-origin controller requests are not allowed.', status: 403 };
+      }
+    } catch {
+      return { message: 'Cross-origin controller requests are not allowed.', status: 403 };
+    }
+  }
+  return undefined;
+}
+
+function isJsonRequest(request: IncomingMessage): boolean {
+  return /^application\/json(?:\s*;|$)/i.test(String(request.headers['content-type'] ?? ''));
+}
+
+function errorStatus(error: unknown): number {
+  const status = Number((error as { statusCode?: number } | undefined)?.statusCode);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 400;
+}
+
 function readJson<T>(request: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
+    const declaredLength = Number(request.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > CONTROLLER_BODY_LIMIT_BYTES) {
+      request.resume();
+      reject(Object.assign(new Error('Controller request body is too large.'), { statusCode: 413 }));
+      return;
+    }
+    let bytes = 0;
+    let rejected = false;
+    request.on('data', (chunk) => {
+      if (rejected) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      bytes += buffer.length;
+      if (bytes > CONTROLLER_BODY_LIMIT_BYTES) {
+        rejected = true;
+        reject(Object.assign(new Error('Controller request body is too large.'), { statusCode: 413 }));
+        return;
+      }
+      chunks.push(buffer);
+    });
     request.on('end', () => {
+      if (rejected) return;
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as T);
       } catch (err) {

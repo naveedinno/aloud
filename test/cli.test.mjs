@@ -9,3 +9,10 @@ test('daemon speak calls only send menu-controlled settings when the user passed
   assert.match(source, /rate: args\.rateExplicit \? args\.rate : undefined/);
   assert.match(source, /voice: args\.voiceExplicit \? args\.voice : undefined/);
 });
+
+test('CLI exposes a scoped daemon shutdown command', () => {
+  assert.match(source, /argv\[0\] === 'shutdown-daemon'/);
+  assert.match(source, /await shutdownSpeechDaemon\(\)/);
+  assert.match(source, /controllerCloseDelay = 3600/);
+  assert.match(source, /controllerCloseDelay = 6000/);
+});

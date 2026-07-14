@@ -1,100 +1,179 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const script = readFileSync(new URL('../scripts/install-macos-service.sh', import.meta.url), 'utf8');
-const appBuildScript = readFileSync(new URL('../scripts/build-macos-app.sh', import.meta.url), 'utf8');
-const setupScript = readFileSync(new URL('../scripts/setup-kokoro.sh', import.meta.url), 'utf8');
-const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const dmgBuildScriptPath = new URL('../scripts/build-macos-dmg.sh', import.meta.url);
-const dmgBuildScript = existsSync(dmgBuildScriptPath) ? readFileSync(dmgBuildScriptPath, 'utf8') : '';
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const installer = read('../scripts/install-macos-service.sh');
+const uninstaller = read('../scripts/uninstall-macos-service.sh');
+const appBuilder = read('../scripts/build-macos-app.sh');
+const dmgBuilder = read('../scripts/build-macos-dmg.sh');
+const setup = read('../scripts/setup-kokoro.sh');
+const clean = read('../scripts/clean.sh');
+const stopOwnedDaemon = read('../scripts/stop-owned-daemon.sh');
+const requirementsLock = read('../requirements-kokoro-py312.lock.txt');
+const packageJson = JSON.parse(read('../package.json'));
 
-test('macOS service installer creates the expected workflow bundle', () => {
-  assert.match(script, /local workflow_dir="\$SERVICES_DIR\/\$service_name\.workflow"/);
-  assert.match(script, /install_workflow "Read Aloud with Kokoro"/);
-  assert.match(script, /install_workflow "Stop Kokoro Reader"/);
-  assert.match(script, /"Heart\|af_heart"/);
-  assert.match(script, /"Daniel\|bm_daniel"/);
-  assert.match(script, /"Slow\|0\.8"/);
-  assert.match(script, /"Fast\|1\.25"/);
-  assert.match(script, /\/Library\/Services/);
-  assert.doesNotMatch(script, /prepare-controller/);
-  assert.match(script, /local\.kokoro-reader\.daemon\.plist/);
-  assert.match(script, /local\.kokoro-reader\.menubar\.plist/);
-  assert.match(script, /install_daemon/);
-  assert.match(script, /install_menubar/);
-  assert.match(script, /prepare-menubar/);
+test('macOS service installer creates all owned workflows', () => {
+  assert.match(installer, /local workflow_dir="\$SERVICES_DIR\/\$service_name\.workflow"/);
+  assert.match(installer, /install_workflow "Read Aloud with Kokoro"/);
+  assert.match(installer, /install_workflow "Stop Kokoro Reader"/);
+  assert.match(installer, /"Heart\|af_heart"/);
+  assert.match(installer, /"Daniel\|bm_daniel"/);
+  assert.match(installer, /"Slow\|0\.8"/);
+  assert.match(installer, /"Fast\|1\.25"/);
+  assert.match(installer, /<key>NSServices<\/key>/);
+  assert.match(installer, /<string>public\.utf8-plain-text<\/string>/);
+  assert.match(installer, /com\.apple\.Automator\.text/);
 });
 
-test('macOS service installer declares an indexed Services menu item', () => {
-  assert.match(script, /<key>NSServices<\/key>/);
-  assert.match(script, /<key>NSMenuItem<\/key>/);
-  assert.match(script, /<string>\$service_name<\/string>/);
-  assert.match(script, /<string>runWorkflowAsService<\/string>/);
-  assert.match(script, /<key>NSSendTypes<\/key>/);
-  assert.match(script, /<string>public\.utf8-plain-text<\/string>/);
+test('macOS service installer persists only its stable private runtime', () => {
+  assert.match(installer, /RUNTIME_VERSION_DIR="\$RUNTIME_ROOT\/\$PACKAGE_VERSION"/);
+  assert.match(installer, /RUNTIME_CURRENT="\$RUNTIME_ROOT\/current"/);
+  assert.match(installer, /Installing a stable private runtime/);
+  assert.match(installer, /KOKORO_READER_NODE/);
+  assert.match(installer, /"\$SOURCE_ROOT\/node\/bin\/node" "\$SOURCE_ROOT\/\.\.\/node\/bin\/node"/);
+  assert.match(installer, /cp "\$SOURCE_NODE" "\$staging_dir\/node\/bin\/node"/);
+  assert.match(installer, /APP_EXECUTABLE="\$RUNTIME_CURRENT\/dist\/cli\.js"/);
+  assert.match(installer, /INSTALLER_PATH="\$RUNTIME_CURRENT\/scripts\/install-macos-service\.sh"/);
+  assert.match(installer, /SOURCE_PAYLOAD_ID/);
+  assert.match(installer, /payload\.sha256/);
+  assert.match(installer, /installed_payload_id.*!=.*SOURCE_PAYLOAD_ID/);
+  assert.match(installer, /--payload-only/);
+  assert.doesNotMatch(installer, /<string>\/Volumes\//);
+  assert.doesNotMatch(installer, /<string>.*AppTranslocation/);
 });
 
-test('macOS service installer accepts selected text and runs the speak command', () => {
-  assert.match(script, /com\.apple\.Automator\.text/);
-  assert.match(script, /\$APP_EXECUTABLE" speak --stdin --no-open --daemon/);
-  assert.doesNotMatch(script, /\$APP_EXECUTABLE" speak --stdin --no-open --controller --daemon/);
-  assert.match(script, /--voice \$voice/);
-  assert.match(script, /--rate \$rate/);
-  assert.match(script, /stop-daemon/);
-  assert.match(script, /pkill -x afplay/);
-  assert.doesNotMatch(script, /KokoroReaderOverlay/);
-  assert.doesNotMatch(script, /pkill -f "kokoro_worker\.py"/);
+test('Services and LaunchAgents use scoped stop behavior and private logs', () => {
+  assert.match(installer, /\$APP_EXECUTABLE" stop-daemon/);
+  assert.doesNotMatch(installer, /\bpkill\b/);
+  assert.doesNotMatch(installer, /\bkillall\b/);
+  assert.doesNotMatch(installer, /\/tmp\/kokoro-reader-(daemon|menubar)/);
+  assert.match(installer, /\$LOGS_DIR\/daemon\.log/);
+  assert.match(installer, /\$LOGS_DIR\/menubar\.log/);
+  assert.match(installer, /launchctl bootstrap/);
+  assert.match(installer, /launchctl print/);
+  assert.doesNotMatch(installer, /launchctl bootstrap[^\n]+\|\| true/);
+  assert.match(installer, /stop-owned-daemon\.sh/);
+  assert.match(installer, /Verified legacy-daemon handoff complete/);
+  assert.match(installer, /Installed and restarted the managed daemon/);
+  assert.match(uninstaller, /stop-owned-daemon\.sh/);
+  assert.match(stopOwnedDaemon, /shutdown-daemon/);
+  assert.match(stopOwnedDaemon, /lsof.*-iTCP:/s);
+  assert.match(stopOwnedDaemon, /is_owned_command/);
+  assert.match(stopOwnedDaemon, /Kokoro Reader\.app\/Contents\/Resources\/app\/dist\/cli\.js daemon/);
+  assert.match(stopOwnedDaemon, /kill -TERM "\$pid"/);
+  assert.match(stopOwnedDaemon, /kill -KILL "\$pid"/);
+  assert.doesNotMatch(stopOwnedDaemon, /\bpkill\b|\bkillall\b/);
+  assert.ok(stopOwnedDaemon.indexOf('is_owned_command "$command"') < stopOwnedDaemon.indexOf('shutdown-daemon'));
 });
 
-test('macOS service installer starts the menu bar helper', () => {
-  assert.match(script, /MENUBAR_EXECUTABLE="\$HOME\/Library\/Application Support\/Kokoro Reader\/menubar\/KokoroReaderMenuBar"/);
-  assert.match(script, /<string>local\.kokoro-reader\.menubar<\/string>/);
-  assert.match(script, /<string>\$MENUBAR_EXECUTABLE<\/string>/);
-  assert.match(script, /<string>\$APP_EXECUTABLE<\/string>/);
-  assert.match(script, /kokoro-reader-menubar\.log/);
+test('uninstaller removes only named Kokoro Reader resources', () => {
+  assert.match(packageJson.scripts['uninstall:macos-service'], /uninstall-macos-service\.sh/);
+  assert.match(uninstaller, /local\.kokoro-reader\.daemon/);
+  assert.match(uninstaller, /local\.kokoro-reader\.menubar/);
+  assert.match(uninstaller, /"Read Aloud with Kokoro"/);
+  assert.match(uninstaller, /"Kokoro Speaker - Daniel"/);
+  assert.match(uninstaller, /"\$APP_SUPPORT\/tts-cache"/);
+  assert.match(uninstaller, /"\$APP_SUPPORT\/preferences\.json"/);
+  assert.match(uninstaller, /"\$APP_SUPPORT\/setup-manifest\.json"/);
+  assert.match(uninstaller, /Refusing to remove an unexpected Application Support path/);
+  assert.ok(uninstaller.indexOf('unsafe HOME directory') < uninstaller.indexOf('remove_launch_agent "local.kokoro-reader.menubar"'));
+  assert.doesNotMatch(uninstaller, /\bpkill\b|\bkillall\b/);
+  assert.doesNotMatch(uninstaller, /rm -rf ["']?\$HOME["']?\s/);
 });
 
-test('macOS service installer refreshes LaunchServices registration', () => {
-  assert.match(script, /lsregister -r -domain local -domain system -domain user/);
-});
-
-test('Kokoro setup is owned by Kokoro Reader', () => {
+test('Kokoro setup is Python 3.12, dependency, and model revision locked', () => {
   assert.equal(packageJson.scripts['setup:kokoro'], 'bash scripts/setup-kokoro.sh');
-  assert.match(setupScript, /Application Support\/Kokoro Reader/);
-  assert.match(setupScript, /kokoro-venv/);
-  assert.match(setupScript, /brew install espeak-ng/);
-  assert.match(setupScript, /pip install "kokoro>=0\.9\.4" soundfile torch/);
+  assert.match(setup, /Python 3\.12/);
+  assert.match(setup, /requirements-kokoro-py312\.lock\.txt/);
+  assert.match(setup, /pip==\$PIP_VERSION/);
+  assert.match(setup, /MODEL_REVISION="f3ff3571791e39611d31c381e3a41a3af07b4987"/);
+  assert.match(setup, /export HF_HUB_OFFLINE=0/);
+  assert.match(setup, /export TRANSFORMERS_OFFLINE=0/);
+  assert.match(setup, /VENV_BACKUP=/);
+  assert.match(setup, /SETUP_MANIFEST_BACKUP=/);
+  assert.match(setup, /mv "\$VENV_DIR" "\$VENV_BACKUP"/);
+  assert.match(setup, /mv "\$SETUP_MANIFEST" "\$SETUP_MANIFEST_BACKUP"/);
+  assert.match(setup, /restore_previous_setup/);
+  assert.match(setup, /setup-manifest\.json/);
+  assert.match(setup, /"schemaVersion": 1/);
+  assert.match(setup, /"status": "complete"/);
+  assert.match(setup, /"requirementsLockSha256"/);
+  assert.match(setup, /mv -f "\$SETUP_MANIFEST_TEMP" "\$SETUP_MANIFEST"/);
+  assert.match(setup, /snapshot_download\(repo_id=repo_id, revision=revision/);
+  assert.match(setup, /refs_dir \/ "main"/);
+  assert.match(requirementsLock, /^kokoro==0\.9\.4$/m);
+  assert.match(requirementsLock, /^soundfile==0\.14\.0$/m);
+  assert.match(requirementsLock, /^torch==2\.12\.1$/m);
+  assert.doesNotMatch(setup, /kokoro>=/);
 });
 
-test('macOS app bundle builder packages the runtime app', () => {
-  assert.equal(packageJson.scripts['build:macos-app'], 'npm run build && bash scripts/build-macos-app.sh');
-  assert.match(appBuildScript, /APP_NAME="Kokoro Reader"/);
-  assert.match(appBuildScript, /APP_DIR="\$BUILD_DIR\/\$APP_NAME\.app"/);
-  assert.match(appBuildScript, /CFBundlePackageType/);
-  assert.match(appBuildScript, /<string>APPL<\/string>/);
-  assert.match(appBuildScript, /Resources\/app/);
-  assert.match(appBuildScript, /cp -R "\$REPO_DIR\/assets\/\." "\$APP_RESOURCES_DIR\/assets\/"/);
-  assert.match(appBuildScript, /scripts\/install-macos-service\.sh/);
-  assert.match(appBuildScript, /scripts\/setup-kokoro\.sh/);
-  assert.match(appBuildScript, /display dialog messageText with title "Kokoro Reader"/);
-  assert.doesNotMatch(appBuildScript, /cancel button "Setup Kokoro"/);
-  assert.match(appBuildScript, /ditto -c -k --sequesterRsrc --keepParent/);
+test('builds clean generated JavaScript before compiling', () => {
+  assert.equal(packageJson.scripts.build, 'npm run clean:dist && tsc');
+  assert.equal(packageJson.scripts['clean:dist'], 'bash scripts/clean.sh --dist-only');
+  assert.match(clean, /rm -rf "\$REPO_DIR\/dist"/);
+  assert.match(clean, /rm -rf "\$REPO_DIR\/build"/);
 });
 
-test('macOS app bundle includes a bundled Node runtime', () => {
-  assert.match(appBuildScript, /RESOURCES_NODE_DIR="\$RESOURCES_DIR\/node\/bin"/);
-  assert.match(appBuildScript, /NODE_SOURCE="\$\{NODE_SOURCE:-\$\(command -v node\)\}"/);
-  assert.match(appBuildScript, /cp "\$NODE_SOURCE" "\$RESOURCES_NODE_DIR\/node"/);
-  assert.match(appBuildScript, /BUNDLED_NODE="\$APP_DIR\/Resources\/node\/bin\/node"/);
-  assert.match(appBuildScript, /\[\[ -x "\$BUNDLED_NODE" \]\]/);
-  assert.match(appBuildScript, /codesign --force --deep --sign - "\$APP_DIR"/);
+test('macOS app builder packages the complete bundled runtime', () => {
+  assert.match(appBuilder, /requirements-kokoro-py312\.lock\.txt/);
+  assert.match(appBuilder, /uninstall-macos-service\.sh/);
+  assert.match(appBuilder, /run-kokoro-reader\.sh/);
+  assert.match(appBuilder, /Resources\/node\/bin/);
+  assert.match(appBuilder, /native\/KokoroReaderMenuBar/);
+  assert.match(appBuilder, /NODE_LICENSE_FILE/);
+  assert.match(appBuilder, /node\/LICENSE/);
+  assert.match(appBuilder, /payload\.sha256/);
+  assert.match(appBuilder, /ensure_payload/);
+  assert.match(appBuilder, /STABLE_RUNTIME="\$APP_SUPPORT\/runtime\/current"/);
+  assert.match(appBuilder, /exec "\$STABLE_RUNTIME\/node\/bin\/node"/);
+  assert.doesNotMatch(appBuilder, /command -v node[^\n]+LAUNCHER/);
 });
 
-test('macOS DMG builder stages the app bundle at the volume root', () => {
-  assert.equal(packageJson.scripts['build:macos-dmg'], 'npm run build:macos-app && bash scripts/build-macos-dmg.sh');
-  assert.match(dmgBuildScript, /STAGING_DIR="\$BUILD_DIR\/dmg-staging"/);
-  assert.match(dmgBuildScript, /ditto "\$APP_DIR" "\$STAGING_DIR\/\$APP_NAME\.app"/);
-  assert.match(dmgBuildScript, /ln -s \/Applications "\$STAGING_DIR\/Applications"/);
-  assert.match(dmgBuildScript, /hdiutil create/);
+test('macOS artifacts derive version and expose explicit architecture', () => {
+  assert.match(appBuilder, /APP_VERSION=.*package\.json/);
+  assert.match(appBuilder, /RUNTIME_ARCH="arm64"/);
+  assert.match(appBuilder, /RUNTIME_ARCH="x86_64"/);
+  assert.match(appBuilder, /lipo -archs "\$NODE_SOURCE"/);
+  assert.match(appBuilder, /otool -L "\$binary"/);
+  assert.match(appBuilder, /\/System\/Library\/\*\|\/usr\/lib\/\*/);
+  assert.match(appBuilder, /Refusing to package a non-portable runtime/);
+  assert.match(appBuilder, /swiftc -target "\$RUNTIME_ARCH-apple-macosx13\.0"/);
+  assert.match(appBuilder, /validate_macos_target "\$NATIVE_HELPER" "13\.0"/);
+  assert.match(appBuilder, /\$APP_NAME-\$APP_VERSION-macos-\$RUNTIME_ARCH/);
+  assert.match(appBuilder, /runtime-architecture\.txt/);
+  assert.match(appBuilder, /printf -v quoted_script '%q'/);
+  assert.doesNotMatch(appBuilder, /<string>0\.1\.0<\/string>/);
+});
+
+test('macOS release pipeline supports hardened signing, notarization, and verification', () => {
+  assert.match(appBuilder, /MACOS_SIGN_IDENTITY/);
+  assert.match(appBuilder, /notarytool submit "\$ZIP_PATH"/);
+  assert.match(appBuilder, /stapler staple "\$APP_DIR"/);
+  assert.match(appBuilder, /stapler validate "\$APP_DIR"/);
+  assert.match(appBuilder, /--options runtime --timestamp/);
+  assert.match(appBuilder, /node\.entitlements/);
+  assert.match(appBuilder, /codesign --verify --deep --strict/);
+  assert.doesNotMatch(appBuilder, /codesign --force --deep --sign/);
+  assert.match(dmgBuilder, /hdiutil verify "\$DMG_PATH"/);
+  assert.match(dmgBuilder, /MACOS_NOTARY_PROFILE/);
+  assert.match(dmgBuilder, /notarytool submit/);
+  assert.match(dmgBuilder, /stapler staple/);
+  assert.match(dmgBuilder, /stapler validate/);
+  assert.match(dmgBuilder, /spctl --assess/);
+
+  const nestedNodeSign = appBuilder.indexOf('sign_component "$RESOURCES_NODE_DIR/node"');
+  const payloadIdentity = appBuilder.indexOf('PAYLOAD_ID="$({');
+  const outerAppSign = appBuilder.indexOf('sign_component "$APP_DIR"');
+  assert.ok(nestedNodeSign >= 0 && nestedNodeSign < payloadIdentity);
+  assert.ok(payloadIdentity < outerAppSign);
+
+  const appSubmission = appBuilder.indexOf('notarytool submit "$ZIP_PATH"');
+  const appStaple = appBuilder.indexOf('stapler staple "$APP_DIR"');
+  const stapledZip = appBuilder.indexOf(
+    '/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"',
+    appStaple,
+  );
+  assert.ok(appSubmission >= 0 && appSubmission < appStaple);
+  assert.ok(appStaple < stapledZip);
 });

@@ -1,6 +1,12 @@
 import { kokoroVoiceOptions } from './kokoro-tts.js';
 import { GLOBAL_SHORTCUTS } from './preferences.js';
 
+// Keep this below the server's one-megabyte request ceiling even when the
+// document contains multi-byte Unicode. The server imports this value too so
+// the browser and API can enforce one user-facing limit.
+export const MAX_READER_TEXT_CHARACTERS = 240_000;
+const MAX_READER_FILE_BYTES = 1_000_000;
+
 function esc(value: string): string {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -132,8 +138,20 @@ export function renderPage(): string {
       background: var(--quiet);
     }
     .connection.is-ready .connection-dot, .health-item.is-ready .health-dot { background: var(--soft); }
+    .connection.is-connecting .connection-dot { background: var(--warning); }
     .connection.is-busy .connection-dot { background: var(--warning); box-shadow: 0 0 0 4px rgba(233, 201, 141, 0.1); }
     .connection.is-error .connection-dot, .health-item.needs-action .health-dot { background: var(--danger); }
+    .connection-retry {
+      min-height: 26px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 0 8px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 800;
+    }
     .reader-card, details {
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -394,12 +412,11 @@ export function renderPage(): string {
       main { width: calc(100vw - 18px); padding-top: 14px; }
       header { margin-bottom: 13px; }
       .connection { padding: 7px 9px; }
-      .connection span:last-child { display: none; }
+      .connection [data-connection-label] { display: none; }
       .config-bar { grid-template-columns: 1fr; padding: 13px; }
       .speed-field { grid-column: auto; }
       .transport { position: sticky; top: 0; z-index: 3; grid-template-columns: 1fr; gap: 10px; padding: 12px 13px; }
       .transport-actions { display: grid; grid-template-columns: 1fr auto; }
-      .primary-button { width: 100%; }
       .chunk-actions { justify-content: space-between; }
       .transport-status { grid-column: auto; grid-row: auto; }
       .editor-head { align-items: flex-start; padding: 12px 13px 9px; }
@@ -474,7 +491,16 @@ export function renderPage(): string {
       font-size: 12px;
       font-weight: 650;
     }
-    .connection-dot { width: 7px; height: 7px; background: var(--mint); box-shadow: none; }
+    .connection-dot { width: 7px; height: 7px; background: var(--muted); box-shadow: none; }
+    .connection.is-connecting .connection-dot { background: var(--amber); }
+    .connection-retry {
+      min-height: 24px;
+      border-color: #52605e;
+      color: #e2e8e5;
+      background: #202625;
+      padding: 0 8px;
+      font-size: 10px;
+    }
 
     .workspace {
       display: grid;
@@ -521,7 +547,7 @@ export function renderPage(): string {
       letter-spacing: 0.003em;
       transition: opacity 180ms var(--ease-ui), box-shadow 180ms var(--ease-ui);
     }
-    textarea::placeholder { color: #6f7775; }
+    textarea::placeholder { color: #818b88; }
     textarea:focus { outline: 0; box-shadow: inset 3px 0 0 var(--mint); }
     textarea[hidden] { display: none; }
     .reading-view {
@@ -611,7 +637,7 @@ export function renderPage(): string {
       background-color: var(--raised);
       font-size: 13px;
     }
-    select:hover, select:focus { border-color: #52726d; background-color: #1b211f; box-shadow: none; outline: none; }
+    select:hover, select:focus { border-color: #52726d; background-color: #1b211f; box-shadow: none; }
     .field-note { min-height: 0; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
     .speed-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
     button { font-family: inherit; }
@@ -648,10 +674,18 @@ export function renderPage(): string {
     .health-detail, .setting-detail { color: var(--muted); font-size: 10px; line-height: 1.35; }
     .health-dot { width: 7px; height: 7px; }
     .repair-button { border-radius: 7px; padding: 6px 8px; font-size: 9px; }
-    .shortcut-row, .privacy-row { gap: 10px; padding-top: 12px; }
+    .shortcut-row, .privacy-row, .cache-row { gap: 10px; padding-top: 12px; }
     .shortcut-row { align-items: flex-start; flex-direction: column; }
     .shortcut-row select { width: 100%; }
     .privacy-toggle { color: #bdc5c3; font-size: 10px; }
+    .cache-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      border-top: 1px solid var(--edge);
+    }
+    .health-retry { width: 100%; margin-top: 8px; }
     .recent-list { margin-top: 10px; }
     .recent-item { border-color: var(--edge); border-radius: 9px; background: var(--raised); }
 
@@ -747,12 +781,22 @@ export function renderPage(): string {
       .document-title h2 { font-size: 11px; }
       .editor-meta { max-width: 130px; margin-top: 2px; font-size: 10px; }
       .editor-actions { flex-wrap: wrap; justify-content: flex-end; }
-      .connection span:last-child { display: inline; }
+      .connection [data-connection-label] { display: inline; }
       textarea { min-height: 48vh; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
       .reading-view { height: 48vh; min-height: 0; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
-      .control-rail { grid-template-columns: 1fr; padding-bottom: 112px; }
+      .control-rail { grid-template-columns: 1fr; padding-bottom: 132px; }
       .control-card { grid-row: auto; }
-      .player-shell { grid-template-columns: 1fr auto; gap: 10px; bottom: 8px; margin-top: 10px; border-radius: 13px; padding: 9px; }
+      .player-shell {
+        position: fixed;
+        right: 10px;
+        bottom: max(8px, env(safe-area-inset-bottom));
+        left: 10px;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        margin: 0;
+        border-radius: 13px;
+        padding: 9px;
+      }
       .transport-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
       .primary-button { width: 100%; }
       .transport-status { grid-column: 1; grid-row: 2; }
@@ -771,9 +815,10 @@ export function renderPage(): string {
           <p class="sub">A private listening desk on your Mac.</p>
         </div>
       </div>
-      <div class="connection" data-connection aria-live="polite">
+      <div class="connection is-connecting" data-connection aria-live="polite" aria-label="Reader status: connecting">
         <span class="connection-dot" aria-hidden="true"></span>
         <span data-connection-label>Connecting</span>
+        <button class="connection-retry" type="button" data-retry-reader hidden>Retry</button>
       </div>
     </header>
 
@@ -794,7 +839,8 @@ export function renderPage(): string {
         <div class="document-body">
           <div class="drop-prompt" data-drop-prompt aria-hidden="true"><strong>Drop a text file here</strong><span>.txt, .md, or plain text</span></div>
           <label class="sr-only" for="reader-text">Text to read</label>
-          <textarea id="reader-text" data-text placeholder="Paste or type something worth listening to…" spellcheck="true"></textarea>
+          <textarea id="reader-text" data-text placeholder="Paste or type something worth listening to…" spellcheck="true" aria-describedby="reader-text-limit"></textarea>
+          <span class="sr-only" id="reader-text-limit">Up to ${MAX_READER_TEXT_CHARACTERS.toLocaleString('en-US')} characters.</span>
           <div class="reading-view" data-reading-view role="document" aria-label="Text being read" tabindex="0" hidden></div>
         </div>
       </section>
@@ -840,12 +886,13 @@ export function renderPage(): string {
           </summary>
           <div class="details-body">
             <div class="health-grid" data-health-grid>
-              <div class="health-item" data-health="kokoro"><span class="health-dot"></span><div><span class="health-name">Kokoro</span><span class="health-detail">Checking local environment…</span></div><button class="repair-button" type="button" data-repair="kokoro">Set up</button></div>
-              <div class="health-item" data-health="daemon"><span class="health-dot"></span><div><span class="health-name">Shared reader</span><span class="health-detail">Checking daemon…</span></div></div>
-              <div class="health-item" data-health="services"><span class="health-dot"></span><div><span class="health-name">Services</span><span class="health-detail">Checking macOS Services…</span></div><button class="repair-button" type="button" data-repair="services">Install</button></div>
-              <div class="health-item" data-health="menuBar"><span class="health-dot"></span><div><span class="health-name">Menu bar</span><span class="health-detail">Checking helper…</span></div><button class="repair-button" type="button" data-repair="services">Install</button></div>
-              <div class="health-item" data-health="accessibility"><span class="health-dot"></span><div><span class="health-name">Accessibility</span><span class="health-detail">Checking selection access…</span></div><button class="repair-button" type="button" data-repair="accessibility">Open settings</button></div>
+              <div class="health-item" data-health="kokoro"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Kokoro</span><span class="health-detail">Checking local environment…</span></div><button class="repair-button" type="button" data-repair="kokoro" aria-label="Set up Kokoro">Set up</button></div>
+              <div class="health-item" data-health="daemon"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Shared reader</span><span class="health-detail">Checking daemon…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Restart Kokoro Reader services">Restart</button></div>
+              <div class="health-item" data-health="services"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Services</span><span class="health-detail">Checking macOS Services…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Install macOS Services">Install</button></div>
+              <div class="health-item" data-health="menuBar"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Menu bar</span><span class="health-detail">Checking helper…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Install menu bar helper">Install</button></div>
+              <div class="health-item" data-health="accessibility"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Accessibility</span><span class="health-detail">Checking selection access…</span></div><button class="repair-button" type="button" data-repair="accessibility" aria-label="Open Accessibility settings">Open settings</button></div>
             </div>
+            <button class="utility-button health-retry" type="button" data-health-retry hidden>Retry connection checks</button>
             <div class="shortcut-row">
               <div><span class="setting-name">Read selection shortcut</span><span class="setting-detail">Used by the menu-bar helper in any Mac app.</span></div>
               <label class="sr-only" for="shortcut">Read selection shortcut</label>
@@ -864,8 +911,12 @@ export function renderPage(): string {
               <div><span class="setting-name">Remember readings</span><span class="setting-detail">The editor restores its draft. Keep up to five additional items here. Off by default.</span></div>
               <label class="privacy-toggle"><input type="checkbox" data-history-enabled> Enabled</label>
             </div>
+            <div class="cache-row" data-cache-row hidden>
+              <div><span class="setting-name">Local audio cache</span><span class="setting-detail" data-cache-detail>Checking cached audio…</span></div>
+              <button class="utility-button" type="button" data-clear-cache aria-label="Clear local audio cache">Clear audio</button>
+            </div>
             <div class="recent-list" data-recent-list></div>
-            <div class="history-footer"><button class="utility-button" type="button" data-clear-history>Clear history</button></div>
+            <div class="history-footer"><button class="utility-button" type="button" data-clear-history disabled>Clear history</button></div>
           </div>
         </details>
       </aside>
@@ -873,7 +924,7 @@ export function renderPage(): string {
 
     <section class="player-shell" aria-label="Playback">
       <div class="transport-actions">
-        <button class="primary-button" type="button" data-play aria-keyshortcuts="Control+Enter Meta+Enter"><span data-play-label>Read aloud</span><span class="key-hint" aria-hidden="true">⌘ ↵</span></button>
+        <button class="primary-button" type="button" data-play aria-keyshortcuts="Control+Enter Meta+Enter" disabled><span data-play-label>Read aloud</span><span class="key-hint" aria-hidden="true">⌘ ↵</span></button>
         <button class="stop-button" type="button" data-stop disabled>Stop</button>
       </div>
       <div class="transport-status">
@@ -895,6 +946,7 @@ export function renderPage(): string {
 
   <script>
   (function(){
+    var readerApp = document.querySelector('[data-reader-app]');
     var text = document.querySelector('[data-text]');
     var count = document.querySelector('[data-count]');
     var status = document.querySelector('[data-status]');
@@ -907,6 +959,7 @@ export function renderPage(): string {
     var preview = document.querySelector('[data-preview]');
     var connection = document.querySelector('[data-connection]');
     var connectionLabel = document.querySelector('[data-connection-label]');
+    var retryReaderButton = document.querySelector('[data-retry-reader]');
     var progress = document.querySelector('[data-progress]');
     var progressTrack = document.querySelector('[data-progress-track]');
     var progressLabel = document.querySelector('[data-progress-label]');
@@ -920,19 +973,78 @@ export function renderPage(): string {
     var chunkActions = document.querySelector('[data-chunk-actions]');
     var historyEnabled = document.querySelector('[data-history-enabled]');
     var recentList = document.querySelector('[data-recent-list]');
+    var clearHistoryButton = document.querySelector('[data-clear-history]');
+    var healthRetryButton = document.querySelector('[data-health-retry]');
+    var cacheRow = document.querySelector('[data-cache-row]');
+    var cacheDetail = document.querySelector('[data-cache-detail]');
+    var clearCacheButton = document.querySelector('[data-clear-cache]');
     var currentStatus = null;
     var requestBusy = false;
+    var readerReachable = false;
+    var healthRepairRunning = false;
+    var healthUnavailable = false;
+    var cacheAvailable = false;
+    var cacheEntries = 0;
     var statusTimer = null;
     var healthTimer = null;
+    var statusPollInFlight = null;
+    var healthPollInFlight = null;
+    var statusPollGeneration = 0;
     var activeChunkKey = '';
+    var ownedJobId = null;
+    var restoreEditorFocus = false;
     var dragDepth = 0;
     var lastClearedText = '';
+    var hasEditorUndo = false;
     var clearUndoTimer = null;
     var localStatusUntil = 0;
     var playbackEndedAt = 0;
+    var storageWarningShown = false;
+    var MAX_TEXT_CHARACTERS = ${MAX_READER_TEXT_CHARACTERS};
+    var MAX_FILE_BYTES = ${MAX_READER_FILE_BYTES};
+    var STATUS_ACTIVE_POLL_MS = 750;
+    var STATUS_IDLE_POLL_MS = 5000;
+    var HEALTH_READY_POLL_MS = 60000;
+    var HEALTH_RETRY_POLL_MS = 30000;
     var TEXT_KEY = 'kokoro-reader-text';
     var HISTORY_KEY = 'kokoro-reader-history';
     var HISTORY_ENABLED_KEY = 'kokoro-reader-history-enabled';
+
+    function warnStorageUnavailable(){
+      if(storageWarningShown) return;
+      storageWarningShown = true;
+      setLocalStatus('Draft saving and reading history are unavailable in this browser. Text still works for this session.', true, 6000);
+    }
+
+    function readStorage(key, fallback){
+      try {
+        var value = window.localStorage.getItem(key);
+        return value === null ? fallback : value;
+      } catch(error) {
+        warnStorageUnavailable();
+        return fallback;
+      }
+    }
+
+    function writeStorage(key, value){
+      try {
+        window.localStorage.setItem(key, value);
+        return true;
+      } catch(error) {
+        warnStorageUnavailable();
+        return false;
+      }
+    }
+
+    function removeStorage(key){
+      try {
+        window.localStorage.removeItem(key);
+        return true;
+      } catch(error) {
+        warnStorageUnavailable();
+        return false;
+      }
+    }
 
     function requestJson(path, options){
       var config = options || {};
@@ -971,25 +1083,60 @@ export function renderPage(): string {
       setStatus(message, error, true);
     }
 
+    function isPlaybackRunning(){
+      return !!(currentStatus && currentStatus.running);
+    }
+
+    function isInteractionLocked(){
+      return requestBusy || isPlaybackRunning();
+    }
+
     function resetClearUndo(){
       if(clearUndoTimer) clearTimeout(clearUndoTimer);
       clearUndoTimer = null;
+      hasEditorUndo = false;
       lastClearedText = '';
       clearButton.textContent = 'Clear';
+      clearButton.setAttribute('aria-label', 'Clear reading text');
       clearButton.removeAttribute('data-undo-clear');
     }
 
-    function setEditorText(value, message){
+    function armEditorUndo(previousValue, action){
       resetClearUndo();
-      text.value = value || '';
-      localStorage.setItem(TEXT_KEY, text.value);
+      hasEditorUndo = true;
+      lastClearedText = previousValue;
+      clearButton.textContent = 'Undo';
+      clearButton.setAttribute('aria-label', 'Undo ' + action);
+      clearButton.setAttribute('data-undo-clear', '');
+      clearUndoTimer = setTimeout(function(){ resetClearUndo(); updateCounts(); }, 8000);
+    }
+
+    function validateTextLength(value){
+      if(String(value || '').length <= MAX_TEXT_CHARACTERS) return true;
+      setLocalStatus('That text is too long. Kokoro Reader accepts up to ' + MAX_TEXT_CHARACTERS.toLocaleString() + ' characters.', true, 6000);
+      return false;
+    }
+
+    function setEditorText(value, message, undoAction){
+      var nextValue = String(value || '');
+      if(!validateTextLength(nextValue)) return false;
+      var previousValue = text.value || '';
+      if(nextValue !== previousValue && undoAction) armEditorUndo(previousValue, undoAction);
+      else resetClearUndo();
+      text.value = nextValue;
+      var saved = writeStorage(TEXT_KEY, text.value);
       updateCounts();
-      text.focus();
-      if(message) setLocalStatus(message);
+      text.focus({ preventScroll: true });
+      if(message && saved) setLocalStatus(message);
+      return true;
     }
 
     function readLocalTextFile(file){
       if(!file) return Promise.resolve();
+      if(isInteractionLocked()){
+        setLocalStatus('Wait for the current reading action to finish before replacing the text.', true);
+        return Promise.resolve();
+      }
       var name = String(file.name || 'text file');
       var supportedName = /\.(txt|md|markdown)$/i.test(name);
       var supportedType = !file.type || /^text\//i.test(file.type);
@@ -997,12 +1144,16 @@ export function renderPage(): string {
         setLocalStatus('Choose a plain text or Markdown file.', true);
         return Promise.resolve();
       }
-      if(file.size > 2 * 1024 * 1024){
-        setLocalStatus('That file is larger than 2 MB. Choose a smaller text file.', true);
+      if(file.size > MAX_FILE_BYTES){
+        setLocalStatus('That file is larger than 1 MB. Choose a smaller text file.', true);
         return Promise.resolve();
       }
       return file.text().then(function(value){
-        setEditorText(value, 'Opened ' + name + '.');
+        if(isInteractionLocked()){
+          setLocalStatus('The file was not opened because reading started first.', true);
+          return;
+        }
+        setEditorText(value, 'Opened ' + name + '. Undo is available for a few seconds.', 'opening ' + name);
       }).catch(function(){
         setLocalStatus('Could not read that local file.', true);
       }).finally(function(){
@@ -1010,12 +1161,10 @@ export function renderPage(): string {
       });
     }
 
-    function comparableSpeechText(value){
-      return String(value || '').trim().replace(/\s+/g, ' ');
-    }
-
     function hideReadingHighlight(){
       if(readingView.hidden) return;
+      var readingHadFocus = document.activeElement === readingView;
+      var shouldRestoreFocus = readingHadFocus || (restoreEditorFocus && document.activeElement === document.body);
       text.scrollTop = readingView.scrollTop;
       readingView.hidden = true;
       readingView.textContent = '';
@@ -1023,9 +1172,13 @@ export function renderPage(): string {
       text.removeAttribute('aria-hidden');
       documentPanel.classList.remove('is-reading');
       activeChunkKey = '';
+      restoreEditorFocus = false;
+      if(shouldRestoreFocus){
+        requestAnimationFrame(function(){ text.focus({ preventScroll: true }); });
+      }
     }
 
-    function renderReadingHighlight(next, state, exactChunk){
+    function renderReadingHighlight(next, state){
       var source = text.value || '';
       var start = Number(state.chunkStart);
       var end = Number(state.chunkEnd);
@@ -1033,9 +1186,8 @@ export function renderPage(): string {
         && Number.isInteger(end)
         && start >= 0
         && end > start
-        && end <= source.length
-        && comparableSpeechText(source.slice(start, end)) === comparableSpeechText(exactChunk);
-      if(!next.running || !exactChunk || !validRange){
+        && end <= source.length;
+      if(!next.running || !validRange || !ownedJobId || next.jobId !== ownedJobId){
         hideReadingHighlight();
         return;
       }
@@ -1067,10 +1219,13 @@ export function renderPage(): string {
       );
       readingView.hidden = false;
       readingView.scrollTop = previousScroll;
+      if(document.activeElement === text) restoreEditorFocus = true;
       text.hidden = true;
       text.setAttribute('aria-hidden', 'true');
       documentPanel.classList.add('is-reading');
       activeChunkKey = key;
+
+      if(restoreEditorFocus) readingView.focus({ preventScroll: true });
 
       requestAnimationFrame(function(){
         var target = Math.max(0, active.offsetTop - Math.max(24, (readingView.clientHeight - active.offsetHeight) / 2));
@@ -1084,8 +1239,41 @@ export function renderPage(): string {
       var words = value.trim() ? value.trim().split(/\s+/).length : 0;
       var paragraphs = value.trim() ? value.trim().split(/\n\s*\n+/).length : 0;
       count.textContent = String(words) + (words === 1 ? ' word' : ' words') + ' · ' + String(paragraphs) + (paragraphs === 1 ? ' paragraph' : ' paragraphs') + ' · ' + String(value.length) + (value.length === 1 ? ' character' : ' characters');
-      if(!currentStatus || !currentStatus.running) play.disabled = !value.trim() || requestBusy;
-      clearButton.disabled = requestBusy || !!(currentStatus && currentStatus.running) || (!value && !lastClearedText);
+      text.setAttribute('aria-invalid', value.length > MAX_TEXT_CHARACTERS ? 'true' : 'false');
+      syncInteractionState();
+    }
+
+    function syncInteractionState(){
+      var running = isPlaybackRunning();
+      var replacingLocked = requestBusy || running;
+      var hasText = !!(text.value || '').trim();
+      var textTooLong = (text.value || '').length > MAX_TEXT_CHARACTERS;
+      readerApp.setAttribute('aria-busy', requestBusy ? 'true' : 'false');
+      playerShell.setAttribute('aria-busy', requestBusy ? 'true' : 'false');
+      documentPanel.setAttribute('aria-busy', requestBusy ? 'true' : 'false');
+      text.readOnly = replacingLocked;
+      fileInput.disabled = replacingLocked;
+      openButton.disabled = replacingLocked;
+      pasteButton.disabled = replacingLocked;
+      clearButton.disabled = replacingLocked || (!hasText && !hasEditorUndo);
+      play.disabled = requestBusy || !readerReachable || (!running && (!hasText || textTooLong));
+      stop.disabled = requestBusy || !readerReachable || !running;
+      preview.disabled = requestBusy || running || !readerReachable;
+      voice.disabled = requestBusy || running || !readerReachable;
+      mode.disabled = requestBusy || running || !readerReachable;
+      shortcut.disabled = requestBusy || !readerReachable;
+      historyEnabled.disabled = replacingLocked;
+      clearHistoryButton.disabled = replacingLocked || loadHistory().length === 0;
+      document.querySelectorAll('[data-restore]').forEach(function(button){ button.disabled = replacingLocked; });
+      document.querySelectorAll('[data-rate]').forEach(function(button){ button.disabled = requestBusy || !readerReachable; });
+      document.querySelectorAll('[data-repair]').forEach(function(button){ button.disabled = requestBusy || running || healthRepairRunning; });
+      healthRetryButton.disabled = requestBusy || running;
+      clearCacheButton.disabled = replacingLocked || !cacheAvailable || cacheEntries <= 0;
+
+      var next = currentStatus || {};
+      document.querySelector('[data-seek="previous"]').disabled = requestBusy || !readerReachable || !next.canGoPrevious;
+      document.querySelector('[data-seek="replay"]').disabled = requestBusy || !readerReachable || !next.canReplay;
+      document.querySelector('[data-seek="next"]').disabled = requestBusy || !readerReachable || !next.canGoNext;
     }
 
     function selectedDescription(select){
@@ -1109,14 +1297,16 @@ export function renderPage(): string {
     function renderStatus(next){
       var wasRunning = !!(currentStatus && currentStatus.running);
       currentStatus = next;
-      connection.classList.remove('is-ready', 'is-busy', 'is-error');
+      readerReachable = true;
+      retryReaderButton.hidden = true;
+      connection.classList.remove('is-connecting', 'is-ready', 'is-busy', 'is-error');
       connection.classList.add(next.running ? 'is-busy' : 'is-ready');
       playerShell.classList.toggle('is-running', !!next.running);
       connectionLabel.textContent = next.running ? (next.paused ? 'Paused' : 'Reading') : 'Local · Ready';
       connection.setAttribute('aria-label', 'Reader status: ' + connectionLabel.textContent);
-      voice.value = next.voice || 'af_heart';
-      mode.value = next.mode || 'auto';
-      shortcut.value = next.shortcut || 'option+r';
+      if(document.activeElement !== voice) voice.value = next.voice || 'af_heart';
+      if(document.activeElement !== mode) mode.value = next.mode || 'auto';
+      if(document.activeElement !== shortcut) shortcut.value = next.shortcut || 'option+r';
       updateVoiceDescription();
       updateModeDescription();
       document.querySelectorAll('[data-rate]').forEach(function(button){
@@ -1127,25 +1317,19 @@ export function renderPage(): string {
       if(!next.running && wasRunning){
         playbackEndedAt = Date.now();
         setLocalStatus(state.message || 'Finished reading.', state.status === 'error', 3200);
+        refreshCache();
       } else if(next.running) {
         playbackEndedAt = 0;
         setStatus(
           next.paused ? 'Paused.' : (next.running ? state.message || 'Reading…' : 'Ready to read.'),
           next.running && state.status === 'error',
         );
+      } else if(state.status === 'error') {
+        setStatus(state.message || 'The last reading failed.', true);
       } else {
         setStatus('Ready to read.', false);
       }
       playLabel.textContent = next.running ? (next.paused ? 'Resume' : 'Pause') : 'Read aloud';
-      play.disabled = requestBusy || (!next.running && !(text.value || '').trim());
-      stop.disabled = requestBusy || !next.running;
-      preview.disabled = requestBusy || next.running;
-      pasteButton.disabled = requestBusy || next.running;
-      openButton.disabled = requestBusy || next.running;
-      clearButton.disabled = requestBusy || next.running || (!(text.value || '') && !lastClearedText);
-      document.querySelector('[data-seek="previous"]').disabled = requestBusy || !next.canGoPrevious;
-      document.querySelector('[data-seek="replay"]').disabled = requestBusy || !next.canReplay;
-      document.querySelector('[data-seek="next"]').disabled = requestBusy || !next.canGoNext;
       chunkActions.hidden = !(next.canGoPrevious || next.canReplay || next.canGoNext);
 
       var total = Number(state.total || 0);
@@ -1162,38 +1346,64 @@ export function renderPage(): string {
         ? (total > 1 ? String(Math.max(1, current)) + ' / ' + String(total) : next.voiceLabel + ' · ' + next.rate + '×')
         : '—';
 
-      var exactChunk = String(state.chunkText || '').trim();
-      renderReadingHighlight(next, state, exactChunk);
+      renderReadingHighlight(next, state);
+      syncInteractionState();
+      if(!document.hidden) scheduleStatusPoll(next.running ? STATUS_ACTIVE_POLL_MS : STATUS_IDLE_POLL_MS);
     }
 
     function markOffline(error){
-      connection.classList.remove('is-ready', 'is-busy');
+      readerReachable = false;
+      connection.classList.remove('is-connecting', 'is-ready', 'is-busy');
       connection.classList.add('is-error');
       connectionLabel.textContent = 'Reader unavailable';
       connection.setAttribute('aria-label', 'Reader status: unavailable');
+      retryReaderButton.hidden = false;
       setStatus(error && error.message ? error.message : 'Could not reach the local reader.', true, true);
       hideReadingHighlight();
+      syncInteractionState();
     }
 
     function refreshStatus(){
-      return requestJson('/api/reader/status').then(renderStatus).catch(markOffline);
+      if(statusPollInFlight) return statusPollInFlight;
+      var generation = statusPollGeneration;
+      statusPollInFlight = requestJson('/api/reader/status')
+        .then(function(next){ if(generation === statusPollGeneration) renderStatus(next); })
+        .catch(function(error){ if(generation === statusPollGeneration) markOffline(error); })
+        .finally(function(){ statusPollInFlight = null; });
+      return statusPollInFlight;
     }
 
     function withBusy(operation){
       if(requestBusy) return Promise.resolve();
+      var focusBeforeRequest = document.activeElement;
+      var restoreControlFocus = focusBeforeRequest
+        && focusBeforeRequest !== document.body
+        && focusBeforeRequest !== text
+        && focusBeforeRequest !== readingView
+        && typeof focusBeforeRequest.focus === 'function';
+      if(restoreControlFocus) restoreEditorFocus = false;
       localStatusUntil = 0;
       requestBusy = true;
-      play.disabled = true;
-      preview.disabled = true;
+      statusPollGeneration += 1;
+      syncInteractionState();
       return Promise.resolve().then(operation).then(function(next){
-        if(next && next.ok) renderStatus(next);
+        if(next && next.ok && typeof next.running === 'boolean') renderStatus(next);
         return next;
       }).catch(function(error){
-        setStatus(error.message || 'Kokoro Reader request failed.', true);
+        setLocalStatus(error.message || 'Kokoro Reader request failed.', true, 6000);
       }).finally(function(){
         requestBusy = false;
         updateCounts();
-        refreshStatus();
+        if(restoreControlFocus){
+          requestAnimationFrame(function(){
+            if(document.activeElement === document.body && document.contains(focusBeforeRequest) && !focusBeforeRequest.disabled){
+              focusBeforeRequest.focus({ preventScroll: true });
+            }
+          });
+        }
+        var pendingStatus = statusPollInFlight;
+        if(pendingStatus) pendingStatus.finally(refreshStatus);
+        else refreshStatus();
       });
     }
 
@@ -1202,12 +1412,18 @@ export function renderPage(): string {
     }
 
     function playOrPause(){
+      if(!readerReachable){
+        setLocalStatus('The local reader is unavailable. Retry the connection first.', true, 5000);
+        return;
+      }
       if(currentStatus && currentStatus.running){
         return withBusy(function(){ return post('/api/reader/control', { action: currentStatus.paused ? 'resume' : 'pause' }); });
       }
-      var value = (text.value || '').trim();
-      if(!value){ setLocalStatus('Paste or type some text first.', true); return; }
+      var value = text.value || '';
+      if(!value.trim()){ setLocalStatus('Paste or type some text first.', true); return; }
+      if(!validateTextLength(value)) return;
       saveRecent(value);
+      ownedJobId = null;
       return withBusy(function(){
         setStatus('Preparing text…');
         return post('/api/reader/speak', {
@@ -1215,6 +1431,9 @@ export function renderPage(): string {
           rate: selectedRate(),
           text: value,
           voice: voice.value
+        }).then(function(next){
+          ownedJobId = next && next.jobId ? next.jobId : null;
+          return next;
         });
       });
     }
@@ -1240,7 +1459,7 @@ export function renderPage(): string {
 
     function loadHistory(){
       try {
-        var value = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+        var value = JSON.parse(readStorage(HISTORY_KEY, '[]') || '[]');
         return Array.isArray(value) ? value.filter(function(item){ return item && typeof item.text === 'string'; }).slice(0, 5) : [];
       } catch(e) { return []; }
     }
@@ -1249,7 +1468,7 @@ export function renderPage(): string {
       if(!historyEnabled.checked) return;
       var items = loadHistory().filter(function(item){ return item.text !== value; });
       items.unshift({ text: value, savedAt: Date.now() });
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 5)));
+      writeStorage(HISTORY_KEY, JSON.stringify(items.slice(0, 5)));
       renderHistory();
     }
 
@@ -1265,6 +1484,7 @@ export function renderPage(): string {
         empty.className = 'recent-empty';
         empty.textContent = historyEnabled.checked ? 'Read something to add it here.' : 'Enable history to keep recent readings on this Mac.';
         recentList.appendChild(empty);
+        syncInteractionState();
         return;
       }
       items.forEach(function(item, index){
@@ -1273,7 +1493,8 @@ export function renderPage(): string {
         var copy = document.createElement('div');
         var title = document.createElement('div');
         title.className = 'recent-title';
-        title.textContent = historyTitle(item.text);
+        var itemTitle = historyTitle(item.text);
+        title.textContent = itemTitle;
         var meta = document.createElement('div');
         meta.className = 'recent-meta';
         meta.textContent = String(item.text.trim().split(/\s+/).length) + ' words';
@@ -1284,15 +1505,20 @@ export function renderPage(): string {
         restore.type = 'button';
         restore.textContent = 'Restore';
         restore.setAttribute('data-restore', String(index));
+        restore.setAttribute('aria-label', 'Restore “' + itemTitle + '”');
         row.appendChild(copy);
         row.appendChild(restore);
         recentList.appendChild(row);
       });
+      syncInteractionState();
     }
 
     function renderHealth(health){
       var names = ['kokoro', 'daemon', 'services', 'menuBar', 'accessibility'];
       var ready = 0;
+      healthUnavailable = false;
+      healthRetryButton.hidden = true;
+      healthRepairRunning = !!(health.repair && health.repair.running);
       names.forEach(function(name){
         var item = document.querySelector('[data-health="' + name + '"]');
         var check = health[name] || { state: 'unknown', detail: 'Status unavailable.' };
@@ -1305,14 +1531,94 @@ export function renderPage(): string {
       });
       var summary = document.querySelector('[data-health-summary]');
       summary.textContent = ready === names.length ? 'Ready' : String(ready) + ' of ' + String(names.length) + ' ready';
-      if(health.repair && health.repair.message) setStatus(health.repair.message, !health.repair.running && /failed/i.test(health.repair.message));
-      document.querySelectorAll('[data-repair]').forEach(function(button){
-        button.disabled = !!(health.repair && health.repair.running);
+      if(health.repair && health.repair.message) setLocalStatus(health.repair.message, !health.repair.running && /failed/i.test(health.repair.message), 5000);
+      syncInteractionState();
+    }
+
+    function markHealthUnavailable(){
+      var firstFailure = !healthUnavailable;
+      healthUnavailable = true;
+      healthRepairRunning = false;
+      healthRetryButton.hidden = false;
+      document.querySelector('[data-health-summary]').textContent = 'Unavailable';
+      document.querySelectorAll('[data-health]').forEach(function(item){
+        item.classList.remove('is-ready');
+        item.classList.add('needs-action');
+        item.querySelector('.health-detail').textContent = 'Could not check this connection.';
+        var button = item.querySelector('[data-repair]');
+        if(button) button.hidden = true;
       });
+      if(firstFailure && readerReachable && !isPlaybackRunning()) setLocalStatus('Mac connection checks are unavailable. Retry when the reader is ready.', true, 5000);
+      syncInteractionState();
     }
 
     function refreshHealth(){
-      return requestJson('/api/system/health').then(renderHealth).catch(function(){});
+      if(healthPollInFlight) return healthPollInFlight;
+      healthPollInFlight = requestJson('/api/system/health')
+        .then(renderHealth)
+        .catch(markHealthUnavailable)
+        .finally(function(){ healthPollInFlight = null; });
+      return healthPollInFlight;
+    }
+
+    function formatBytes(value){
+      var bytes = Math.max(0, Number(value || 0));
+      if(bytes < 1024) return String(bytes) + ' B';
+      if(bytes < 1024 * 1024) return (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+    }
+
+    function renderCache(cache){
+      var entries = Number(cache.entries ?? cache.files ?? cache.count ?? 0);
+      var bytes = Number(cache.bytes ?? cache.sizeBytes ?? cache.totalBytes ?? 0);
+      cacheAvailable = true;
+      cacheEntries = Math.max(0, entries);
+      cacheRow.hidden = false;
+      cacheDetail.textContent = cacheEntries > 0
+        ? String(cacheEntries) + (cacheEntries === 1 ? ' audio file · ' : ' audio files · ') + formatBytes(bytes)
+        : 'No generated audio is cached.';
+      syncInteractionState();
+    }
+
+    function refreshCache(){
+      return requestJson('/api/system/cache').then(renderCache).catch(function(){
+        cacheAvailable = false;
+        cacheEntries = 0;
+        cacheRow.hidden = true;
+        syncInteractionState();
+      });
+    }
+
+    function scheduleStatusPoll(delay){
+      if(statusTimer) clearTimeout(statusTimer);
+      if(document.hidden) { statusTimer = null; return; }
+      statusTimer = setTimeout(runStatusPoll, delay);
+    }
+
+    function scheduleHealthPoll(delay){
+      if(healthTimer) clearTimeout(healthTimer);
+      if(document.hidden) { healthTimer = null; return; }
+      healthTimer = setTimeout(runHealthPoll, delay);
+    }
+
+    function runStatusPoll(){
+      statusTimer = null;
+      if(document.hidden) return;
+      if(requestBusy){
+        scheduleStatusPoll(STATUS_ACTIVE_POLL_MS);
+        return;
+      }
+      refreshStatus().finally(function(){
+        scheduleStatusPoll(readerReachable && isPlaybackRunning() ? STATUS_ACTIVE_POLL_MS : STATUS_IDLE_POLL_MS);
+      });
+    }
+
+    function runHealthPoll(){
+      healthTimer = null;
+      if(document.hidden) return;
+      refreshHealth().finally(function(){
+        scheduleHealthPoll(healthUnavailable ? HEALTH_RETRY_POLL_MS : HEALTH_READY_POLL_MS);
+      });
     }
 
     document.addEventListener('click', function(event){
@@ -1320,39 +1626,61 @@ export function renderPage(): string {
       if(target.closest('[data-play]')){ playOrPause(); return; }
       if(target.closest('[data-stop]')){ withBusy(function(){ return post('/api/reader/control', { action: 'stop' }); }); return; }
       if(target.closest('[data-preview]')){ previewVoice(); return; }
+      if(target.closest('[data-retry-reader]')){
+        connection.classList.remove('is-error', 'is-ready', 'is-busy');
+        connection.classList.add('is-connecting');
+        connectionLabel.textContent = 'Reconnecting';
+        connection.setAttribute('aria-label', 'Reader status: reconnecting');
+        retryReaderButton.hidden = true;
+        setStatus('Trying to reconnect to the local reader…', false, true);
+        refreshStatus();
+        refreshHealth();
+        refreshCache();
+        return;
+      }
+      if(target.closest('[data-health-retry]')){ refreshHealth(); return; }
       var rateButton = target.closest('[data-rate]');
       if(rateButton){
-        document.querySelectorAll('[data-rate]').forEach(function(button){ button.setAttribute('aria-pressed', button === rateButton ? 'true' : 'false'); });
         updateSettings({ rate: Number(rateButton.getAttribute('data-rate')) });
         return;
       }
       var seek = target.closest('[data-seek]');
       if(seek){ withBusy(function(){ return post('/api/reader/seek', { action: seek.getAttribute('data-seek') }); }); return; }
       if(target.closest('[data-clear]')){
-        if(lastClearedText){
+        if(isInteractionLocked()) return;
+        if(hasEditorUndo){
           var restoredText = lastClearedText;
           setEditorText(restoredText, 'Text restored.');
           return;
         }
         if(!text.value) return;
-        lastClearedText = text.value;
+        var clearedText = text.value;
+        armEditorUndo(clearedText, 'clearing the text');
         text.value = '';
-        localStorage.removeItem(TEXT_KEY);
+        var draftRemoved = removeStorage(TEXT_KEY);
         updateCounts();
-        clearButton.textContent = 'Undo';
-        clearButton.setAttribute('data-undo-clear', '');
-        setLocalStatus('Text cleared. Undo is available for a few seconds.');
-        clearUndoTimer = setTimeout(function(){ resetClearUndo(); updateCounts(); }, 8000);
+        setLocalStatus(draftRemoved
+          ? 'Text cleared. Undo is available for a few seconds.'
+          : 'Text cleared for this session, but the saved draft could not be removed.', !draftRemoved, 6000);
         text.focus();
         return;
       }
       if(target.closest('[data-open]')){
+        if(isInteractionLocked()) return;
         fileInput.click();
         return;
       }
       if(target.closest('[data-paste]')){
+        if(isInteractionLocked()) return;
         if(!navigator.clipboard || !navigator.clipboard.readText){ setLocalStatus('Clipboard access is unavailable in this browser.', true); return; }
-        navigator.clipboard.readText().then(function(value){ setEditorText(value, 'Pasted from the clipboard.'); }).catch(function(){ setLocalStatus('Allow clipboard access, then try Paste again.', true); });
+        navigator.clipboard.readText().then(function(value){
+          if(isInteractionLocked()){
+            setLocalStatus('The clipboard was not pasted because reading started first.', true);
+            return;
+          }
+          if(!value){ setLocalStatus('The clipboard does not contain text.', true); return; }
+          setEditorText(value, 'Pasted from the clipboard. Undo is available for a few seconds.', 'pasting from the clipboard');
+        }).catch(function(){ setLocalStatus('Allow clipboard access, then try Paste again.', true); });
         return;
       }
       var repair = target.closest('[data-repair]');
@@ -1362,25 +1690,42 @@ export function renderPage(): string {
       }
       var restore = target.closest('[data-restore]');
       if(restore){
+        if(isInteractionLocked()) return;
         var item = loadHistory()[Number(restore.getAttribute('data-restore'))];
-        if(item) setEditorText(item.text, 'Reading restored.');
+        if(item) setEditorText(item.text, 'Reading restored. Undo is available for a few seconds.', 'restoring a saved reading');
         return;
       }
-      if(target.closest('[data-clear-history]')){ localStorage.removeItem(HISTORY_KEY); renderHistory(); }
+      if(target.closest('[data-clear-history]')){
+        if(isInteractionLocked() || !loadHistory().length) return;
+        if(!removeStorage(HISTORY_KEY)) return;
+        renderHistory();
+        setLocalStatus('Reading history cleared.');
+        return;
+      }
+      if(target.closest('[data-clear-cache]')){
+        if(isInteractionLocked() || !cacheAvailable || cacheEntries <= 0) return;
+        withBusy(function(){ return post('/api/system/cache', { action: 'clear' }); }).then(function(result){
+          if(!result) return;
+          setLocalStatus('Local audio cache cleared.');
+          return refreshCache();
+        });
+      }
     });
 
     voice.addEventListener('change', function(){ updateVoiceDescription(); updateSettings({ voice: voice.value }); });
     mode.addEventListener('change', function(){ updateModeDescription(); updateSettings({ mode: mode.value }); });
     shortcut.addEventListener('change', function(){ updateSettings({ shortcut: shortcut.value }); });
-    historyEnabled.addEventListener('change', function(){ localStorage.setItem(HISTORY_ENABLED_KEY, historyEnabled.checked ? 'true' : 'false'); renderHistory(); });
+    historyEnabled.addEventListener('change', function(){ writeStorage(HISTORY_ENABLED_KEY, historyEnabled.checked ? 'true' : 'false'); renderHistory(); });
     fileInput.addEventListener('change', function(){ readLocalTextFile(fileInput.files && fileInput.files[0]); });
     documentPanel.addEventListener('dragenter', function(event){
+      if(isInteractionLocked()) return;
       if(!event.dataTransfer || !event.dataTransfer.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
       event.preventDefault();
       dragDepth += 1;
       documentPanel.classList.add('is-dragging');
     });
     documentPanel.addEventListener('dragover', function(event){
+      if(isInteractionLocked()) return;
       if(!event.dataTransfer || !event.dataTransfer.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'copy';
@@ -1393,10 +1738,13 @@ export function renderPage(): string {
       event.preventDefault();
       dragDepth = 0;
       documentPanel.classList.remove('is-dragging');
-      if(currentStatus && currentStatus.running) return;
+      if(isInteractionLocked()){
+        setLocalStatus('Wait for the current reading action to finish before replacing the text.', true);
+        return;
+      }
       readLocalTextFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
     });
-    text.addEventListener('input', function(){ resetClearUndo(); localStorage.setItem(TEXT_KEY, text.value || ''); updateCounts(); });
+    text.addEventListener('input', function(){ resetClearUndo(); writeStorage(TEXT_KEY, text.value || ''); updateCounts(); });
     document.addEventListener('keydown', function(event){
       if((event.metaKey || event.ctrlKey) && event.key === 'Enter'){
         event.preventDefault();
@@ -1407,17 +1755,30 @@ export function renderPage(): string {
       }
     });
 
-    text.value = localStorage.getItem(TEXT_KEY) || '';
-    historyEnabled.checked = localStorage.getItem(HISTORY_ENABLED_KEY) === 'true';
+    text.value = readStorage(TEXT_KEY, '');
+    historyEnabled.checked = readStorage(HISTORY_ENABLED_KEY, 'false') === 'true';
+    resetClearUndo();
     updateCounts();
+    if((text.value || '').length > MAX_TEXT_CHARACTERS) validateTextLength(text.value);
     updateVoiceDescription();
     updateModeDescription();
     renderHistory();
-    refreshStatus();
-    refreshHealth();
-    statusTimer = setInterval(refreshStatus, 900);
-    healthTimer = setInterval(refreshHealth, 6000);
-    window.addEventListener('beforeunload', function(){ clearInterval(statusTimer); clearInterval(healthTimer); if(clearUndoTimer) clearTimeout(clearUndoTimer); });
+    runStatusPoll();
+    runHealthPoll();
+    refreshCache();
+    document.addEventListener('visibilitychange', function(){
+      if(document.hidden){
+        if(statusTimer) clearTimeout(statusTimer);
+        if(healthTimer) clearTimeout(healthTimer);
+        statusTimer = null;
+        healthTimer = null;
+        return;
+      }
+      runStatusPoll();
+      runHealthPoll();
+      refreshCache();
+    });
+    window.addEventListener('beforeunload', function(){ clearTimeout(statusTimer); clearTimeout(healthTimer); if(clearUndoTimer) clearTimeout(clearUndoTimer); });
   })();
   </script>
 </body>
