@@ -18,15 +18,16 @@ if [[ -z "$SAFE_HOME" || "$SAFE_HOME" == "/" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_SUPPORT="$SAFE_HOME/Library/Application Support/Kokoro Reader"
+APP_SUPPORT="$SAFE_HOME/Library/Application Support/Aloud"
+LEGACY_APP_SUPPORT="$SAFE_HOME/Library/Application Support/Kokoro Reader"
 SERVICES_DIR="$SAFE_HOME/Library/Services"
 LAUNCH_AGENTS_DIR="$SAFE_HOME/Library/LaunchAgents"
-TMP_ROOT="${KOKORO_READER_TMP_ROOT:-/tmp}"
+TMP_ROOT="${ALOUD_TMP_ROOT:-/tmp}"
 DOMAIN="gui/$(id -u)"
 
 WORKFLOWS=(
-  "Read Aloud with Kokoro"
-  "Stop Kokoro Reader"
+  "Read Selection Aloud"
+  "Stop Aloud"
   "Kokoro Speaker - Heart"
   "Kokoro Speaker - Bella"
   "Kokoro Speaker - Nicole"
@@ -48,6 +49,8 @@ remove_launch_agent() {
   rm -f "$plist"
 }
 
+remove_launch_agent "local.aloud.menubar" "$LAUNCH_AGENTS_DIR/local.aloud.menubar.plist"
+remove_launch_agent "local.aloud.daemon" "$LAUNCH_AGENTS_DIR/local.aloud.daemon.plist"
 remove_launch_agent "local.kokoro-reader.menubar" "$LAUNCH_AGENTS_DIR/local.kokoro-reader.menubar.plist"
 remove_launch_agent "local.kokoro-reader.daemon" "$LAUNCH_AGENTS_DIR/local.kokoro-reader.daemon.plist"
 
@@ -64,8 +67,11 @@ fi
 for service_name in "${WORKFLOWS[@]}"; do
   rm -rf -- "$SERVICES_DIR/$service_name.workflow"
 done
+rm -rf -- \
+  "$SERVICES_DIR/Read Aloud with Kokoro.workflow" \
+  "$SERVICES_DIR/Stop Kokoro Reader.workflow"
 
-expected_support="$SAFE_HOME/Library/Application Support/Kokoro Reader"
+expected_support="$SAFE_HOME/Library/Application Support/Aloud"
 if [[ "$APP_SUPPORT" != "$expected_support" ]]; then
   echo "Refusing to remove an unexpected Application Support path: $APP_SUPPORT" >&2
   exit 1
@@ -83,11 +89,14 @@ for owned_path in \
 done
 rm -f "$APP_SUPPORT/preferences.json" "$APP_SUPPORT/setup-manifest.json"
 rmdir "$APP_SUPPORT" >/dev/null 2>&1 || true
+if [[ "$LEGACY_APP_SUPPORT" == "$SAFE_HOME/Library/Application Support/Kokoro Reader" ]]; then
+  rm -rf -- "$LEGACY_APP_SUPPORT"
+fi
 if [[ "$TMP_ROOT" == /* && "$TMP_ROOT" != "/" ]]; then
-  rm -rf -- "$TMP_ROOT/kokoro-reader-controller-chrome"
+  rm -rf -- "$TMP_ROOT/aloud-controller-chrome"
 fi
 
-if [[ "${KOKORO_READER_SKIP_REGISTRATION:-0}" != "1" ]]; then
+if [[ "${ALOUD_SKIP_REGISTRATION:-0}" != "1" ]]; then
   LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   if [[ -x "$LSREGISTER" ]]; then
     "$LSREGISTER" -r -domain local -domain system -domain user >/dev/null 2>&1 || true
@@ -98,4 +107,4 @@ if [[ "${KOKORO_READER_SKIP_REGISTRATION:-0}" != "1" ]]; then
   fi
 fi
 
-echo "Removed Kokoro Reader Services, LaunchAgents, helper, cache, preferences, model, and managed runtime."
+echo "Removed Aloud Services, LaunchAgents, helper, cache, preferences, model, and managed runtime."

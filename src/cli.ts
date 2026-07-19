@@ -26,7 +26,7 @@ function parseArgs(argv: string[]): Args {
 
 function printHelp(): void {
   console.log(`
-kokoro-reader - paste text and read it aloud with Kokoro AI.
+aloud - read selected, pasted, or piped text with local voices.
 
 USAGE
   npm run dev
@@ -44,7 +44,7 @@ OPTIONS
 
 function printSpeakHelp(): void {
   console.log(`
-kokoro-reader speak - read stdin or command text aloud with Kokoro AI.
+aloud speak - read stdin or command text with a local voice.
 
 USAGE
   npm run start -- speak --stdin --no-open
@@ -52,7 +52,9 @@ USAGE
 
 OPTIONS
   --stdin       Read text from stdin. This is the default when no text is passed.
-  --voice <id>  Kokoro voice id or alias. Defaults to af_heart.
+  --engine <id> Voice model: kokoro or pocket. Defaults to kokoro.
+  --pocket      Use Pocket TTS (shortcut for --engine pocket).
+  --voice <id>  Voice id for the selected model.
   --rate <n>    Speech rate. Defaults to 1.
   --mode <mode> Reading mode: auto, fast-start, or smooth. Defaults to fast-start.
   --auto        Balance a quick start with a short prepared queue.
@@ -110,6 +112,7 @@ async function main(): Promise<void> {
     if (args.daemon) {
       await sendSpeakToDaemon({
         batch: args.batch,
+        engine: args.engineExplicit ? args.engine : undefined,
         mode: args.modeExplicit ? args.mode : undefined,
         prefetch: args.prefetch,
         rate: args.rateExplicit ? args.rate : undefined,
@@ -132,6 +135,7 @@ async function main(): Promise<void> {
     try {
       const result = await speakText({
         batch: args.batch,
+        engine: args.engine,
         mode: args.mode,
         onProgress: (progress) => controller?.update(progress),
         playbackRate: () => currentRate,
@@ -143,12 +147,12 @@ async function main(): Promise<void> {
         workers: args.workers,
       });
       controller?.update({ message: 'Finished reading', status: 'done' });
-      console.log(`kokoro-reader spoke ${result.cached ? 'cached' : 'generated'} audio with ${result.voice} at ${currentRate}x.`);
+      console.log(`aloud spoke ${result.cached ? 'cached' : 'generated'} audio with ${result.voice} at ${currentRate}x.`);
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         controllerCloseDelay = 3600;
         controller?.update({ message: 'Stopped', status: 'stopped' });
-        console.log('kokoro-reader stopped.');
+        console.log('aloud stopped.');
         return;
       }
       controller?.update({

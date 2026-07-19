@@ -1,6 +1,7 @@
 {
-  "name": "kokoro-reader",
+  "name": "aloud",
   "version": "0.1.0",
+  "description": "A private local Mac app that reads selected and pasted text aloud.",
   "type": "module",
   "private": true,
   "scripts": {
@@ -11,8 +12,8 @@
     "clean:dist": "bash scripts/clean.sh --dist-only",
     "dev": "npm run build && npm run start",
     "install:macos-service": "npm run build && bash scripts/install-macos-service.sh",
-    "setup:kokoro": "bash scripts/setup-kokoro.sh",
-    "start": "bash scripts/run-kokoro-reader.sh",
+    "setup:aloud": "bash scripts/setup-aloud.sh",
+    "start": "bash scripts/run-aloud.sh",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:packaging": "node --test test/macos-service-script.test.mjs test/macos-packaging-clean-room.test.mjs",
     "uninstall:macos-service": "bash scripts/uninstall-macos-service.sh"

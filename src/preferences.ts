@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { kokoroReaderSupportDir } from './kokoro-tts.js';
+import { aloudSupportDir } from './kokoro-tts.js';
+import type { SpeechEngine } from './speech-engine.js';
 import type { SpeechMode } from './speak.js';
 
 export const GLOBAL_SHORTCUTS = [
@@ -13,6 +14,7 @@ export const GLOBAL_SHORTCUTS = [
 export type GlobalShortcut = (typeof GLOBAL_SHORTCUTS)[number]['id'];
 
 export interface ReaderPreferences {
+  engine: SpeechEngine;
   mode: SpeechMode;
   rate: number;
   shortcut: GlobalShortcut;
@@ -20,6 +22,7 @@ export interface ReaderPreferences {
 }
 
 export const DEFAULT_READER_PREFERENCES: ReaderPreferences = {
+  engine: 'kokoro',
   mode: 'auto',
   rate: 1,
   shortcut: 'option+r',
@@ -27,7 +30,7 @@ export const DEFAULT_READER_PREFERENCES: ReaderPreferences = {
 };
 
 export function readerPreferencesPath(home: string): string {
-  return join(kokoroReaderSupportDir(home), 'preferences.json');
+  return join(aloudSupportDir(home), 'preferences.json');
 }
 
 export function loadReaderPreferences(home: string): Partial<ReaderPreferences> {
@@ -43,7 +46,7 @@ export function loadReaderPreferences(home: string): Partial<ReaderPreferences> 
 
 export function saveReaderPreferences(home: string, preferences: ReaderPreferences): void {
   const path = readerPreferencesPath(home);
-  mkdirSync(kokoroReaderSupportDir(home), { recursive: true });
+  mkdirSync(aloudSupportDir(home), { recursive: true });
   writeFileSync(path, `${JSON.stringify(preferences, null, 2)}\n`, 'utf8');
 }
 

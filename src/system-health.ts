@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, readFileSync, readdirSync } from 'no
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { kokoroTtsVenvDir } from './kokoro-tts.js';
+import { aloudVenvDir } from './kokoro-tts.js';
 import type { SpeechDaemonStatus } from './daemon.js';
 
 export type SystemRepairAction = 'accessibility' | 'kokoro' | 'services';
@@ -49,6 +49,8 @@ const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 interface KokoroSetupManifest {
   modelRepository?: string;
   modelRevision?: string;
+  pocketRequirementsLockSha256?: string;
+  pocketTtsVersion?: string;
   pythonVersion?: string;
   requiredModelFiles?: unknown;
   requirementsLockSha256?: string;
@@ -67,16 +69,16 @@ export function readerSystemHealth(
 ): ReaderSystemHealth {
   const servicesDir = join(home, 'Library', 'Services');
   const launchAgentsDir = join(home, 'Library', 'LaunchAgents');
-  const menuBarExecutable = join(home, 'Library', 'Application Support', 'Kokoro Reader', 'menubar', 'KokoroReaderMenuBar');
+  const menuBarExecutable = join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar');
   const isMac = process.platform === 'darwin';
   const servicesReady = isMac
-    && existsSync(join(servicesDir, 'Read Aloud with Kokoro.workflow'))
-    && existsSync(join(servicesDir, 'Stop Kokoro Reader.workflow'));
+    && existsSync(join(servicesDir, 'Read Selection Aloud.workflow'))
+    && existsSync(join(servicesDir, 'Stop Aloud.workflow'));
   const menuBarInstalled = isMac
-    && existsSync(join(launchAgentsDir, 'local.kokoro-reader.menubar.plist'))
+    && existsSync(join(launchAgentsDir, 'local.aloud.menubar.plist'))
     && executableExists(menuBarExecutable);
   const isLoaded = options.launchAgentLoaded ?? defaultLaunchAgentLoaded;
-  const menuBarReady = menuBarInstalled && isLoaded('local.kokoro-reader.menubar');
+  const menuBarReady = menuBarInstalled && isLoaded('local.aloud.menubar');
   const kokoroReady = kokoroEnvironmentReady(home);
   const accessibilityState = typeof status?.accessibilityTrusted === 'boolean'
     ? status.accessibilityTrusted ? 'ready' : 'needs-action'
@@ -96,7 +98,7 @@ export function readerSystemHealth(
       state: status?.ok ? 'ready' : 'needs-action',
     },
     kokoro: {
-      detail: kokoroReady ? 'Local Kokoro environment is installed.' : 'Kokoro still needs local setup.',
+      detail: kokoroReady ? 'Kokoro and Pocket TTS are installed locally.' : 'The local voice models still need setup.',
       state: kokoroReady ? 'ready' : 'needs-action',
     },
     menuBar: {
@@ -117,7 +119,7 @@ export function readerSystemHealth(
 }
 
 export function runSystemRepair(action: SystemRepairAction, projectRoot: string): { message: string; started: boolean } {
-  if (process.platform !== 'darwin') throw new Error('Kokoro Reader setup actions currently support macOS only.');
+  if (process.platform !== 'darwin') throw new Error('Aloud setup actions currently support macOS only.');
   if (repairState?.running) return { message: repairState.message, started: false };
 
   if (action === 'accessibility') {
@@ -131,7 +133,7 @@ export function runSystemRepair(action: SystemRepairAction, projectRoot: string)
   }
 
   const script = action === 'kokoro'
-    ? join(projectRoot, 'scripts', 'setup-kokoro.sh')
+    ? join(projectRoot, 'scripts', 'setup-aloud.sh')
     : join(projectRoot, 'scripts', 'install-macos-service.sh');
   if (!existsSync(script)) throw new Error(`Setup script is missing: ${script}`);
 
@@ -170,13 +172,14 @@ export function runSystemRepair(action: SystemRepairAction, projectRoot: string)
 }
 
 export function kokoroEnvironmentReady(home = homedir()): boolean {
-  const appSupport = join(home, 'Library', 'Application Support', 'Kokoro Reader');
-  const venv = kokoroTtsVenvDir(home);
+  const appSupport = join(home, 'Library', 'Application Support', 'Aloud');
+  const venv = aloudVenvDir(home);
   if (!executableExists(join(venv, 'bin', 'python'))) return false;
   const libDir = join(venv, 'lib');
   if (!existsSync(libDir)) return false;
   try {
     if (!readdirSync(libDir).some((entry) => existsSync(join(libDir, entry, 'site-packages', 'kokoro')))) return false;
+    if (!readdirSync(libDir).some((entry) => existsSync(join(libDir, entry, 'site-packages', 'pocket_tts')))) return false;
   } catch {
     return false;
   }
@@ -188,17 +191,20 @@ export function kokoroEnvironmentReady(home = homedir()): boolean {
     return false;
   }
   if (
-    manifest.schemaVersion !== 1
+    manifest.schemaVersion !== 2
     || manifest.status !== 'complete'
     || manifest.pythonVersion !== '3.12'
     || manifest.modelRepository !== KOKORO_MODEL_REPOSITORY
     || manifest.modelRevision !== KOKORO_MODEL_REVISION
+    || manifest.pocketTtsVersion !== '2.1.0'
     || !sameStringArray(manifest.requiredModelFiles, KOKORO_REQUIRED_MODEL_FILES)
   ) return false;
 
   try {
     const lock = readFileSync(join(PROJECT_ROOT, 'requirements-kokoro-py312.lock.txt'));
     if (manifest.requirementsLockSha256 !== createHash('sha256').update(lock).digest('hex')) return false;
+    const pocketLock = readFileSync(join(PROJECT_ROOT, 'requirements-pocket-py312.lock.txt'));
+    if (manifest.pocketRequirementsLockSha256 !== createHash('sha256').update(pocketLock).digest('hex')) return false;
   } catch {
     return false;
   }
@@ -210,7 +216,7 @@ export function kokoroEnvironmentReady(home = homedir()): boolean {
     'models--hexgrad--Kokoro-82M',
   );
   try {
-    if (readFileSync(join(modelCache, 'refs', 'main'), 'utf8').trim() !== KOKORO_MODEL_REVISION) return false;
+    if (readFileSync(join(modelCache, 'refs', 'main'), 'utf8') !== KOKORO_MODEL_REVISION) return false;
   } catch {
     return false;
   }

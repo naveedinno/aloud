@@ -41,7 +41,7 @@ voice = sys.argv[2]
 speed = float(sys.argv[3])
 lang_code = sys.argv[4]
 text = sys.stdin.read().strip()
-device = os.environ.get("KOKORO_READER_DEVICE", os.environ.get("DIFFSTORY_KOKORO_DEVICE", "cpu")) or None
+device = os.environ.get("ALOUD_DEVICE", os.environ.get("DIFFSTORY_KOKORO_DEVICE", "cpu")) or None
 
 try:
     from kokoro import KPipeline
@@ -50,7 +50,7 @@ try:
     import torch
 except Exception as exc:
     raise RuntimeError(
-        'Kokoro is not installed. Run: npm run setup:kokoro'
+        'Kokoro is not installed. Run: npm run setup:aloud'
     ) from exc
 
 pipeline = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", device=device)
@@ -87,13 +87,13 @@ except Exception as exc:
     print(json.dumps({
         "id": None,
         "ok": False,
-        "error": 'Kokoro is not installed. Run: npm run setup:kokoro'
+        "error": 'Kokoro is not installed. Run: npm run setup:aloud'
     }), flush=True)
     raise
 
 pipelines = {}
 shared_model = None
-device = os.environ.get("KOKORO_READER_DEVICE", os.environ.get("DIFFSTORY_KOKORO_DEVICE", "cpu")) or None
+device = os.environ.get("ALOUD_DEVICE", os.environ.get("DIFFSTORY_KOKORO_DEVICE", "cpu")) or None
 
 def pipeline_for(lang_code):
     global shared_model
@@ -278,7 +278,7 @@ export function kokoroTtsCachePath(home: string, input: KokoroTtsRequest): Kokor
 }
 
 export function kokoroTtsCacheDir(home: string): string {
-  return join(kokoroReaderSupportDir(home), 'tts-cache', 'kokoro');
+  return join(aloudSupportDir(home), 'tts-cache', 'kokoro');
 }
 
 export function isValidKokoroCacheFile(path: string): boolean {
@@ -389,12 +389,12 @@ export function clearKokoroTtsCache(
   return { ...kokoroTtsCacheStats(home), removedBytes, removedFiles };
 }
 
-export function kokoroTtsVenvDir(home: string): string {
-  return join(kokoroReaderSupportDir(home), 'kokoro-venv');
+export function aloudVenvDir(home: string): string {
+  return join(aloudSupportDir(home), 'kokoro-venv');
 }
 
-export function kokoroReaderSupportDir(home: string): string {
-  return join(home, 'Library', 'Application Support', 'Kokoro Reader');
+export function aloudSupportDir(home: string): string {
+  return join(home, 'Library', 'Application Support', 'Aloud');
 }
 
 export function legacyKokoroTtsVenvDir(home: string): string {
@@ -402,9 +402,9 @@ export function legacyKokoroTtsVenvDir(home: string): string {
 }
 
 export function kokoroPythonCommand(home: string, override?: string): string {
-  const forced = String(override ?? process.env.KOKORO_READER_PYTHON ?? process.env.DIFFSTORY_KOKORO_PYTHON ?? '').trim();
+  const forced = String(override ?? process.env.ALOUD_PYTHON ?? process.env.DIFFSTORY_KOKORO_PYTHON ?? '').trim();
   if (forced) return forced;
-  const managed = join(kokoroTtsVenvDir(home), 'bin', 'python');
+  const managed = join(aloudVenvDir(home), 'bin', 'python');
   if (existsSync(managed)) return managed;
   const legacyManaged = join(legacyKokoroTtsVenvDir(home), 'bin', 'python');
   if (existsSync(legacyManaged)) return legacyManaged;
@@ -597,7 +597,7 @@ function ensureKokoroWorkerHelper(dir: string): string {
 
 function kokoroUnavailable(detail: string): Error {
   const suffix = detail ? ` ${detail}` : '';
-  return new Error(`Kokoro is unavailable. Run: npm run setup:kokoro. It creates Kokoro Reader's local Python environment and installs espeak-ng, kokoro, and soundfile.${suffix}`);
+  return new Error(`Kokoro is unavailable. Run: npm run setup:aloud. It creates Aloud's local Python environment and installs espeak-ng, kokoro, and soundfile.${suffix}`);
 }
 
 function speechCancelled(): Error {
@@ -1089,7 +1089,7 @@ class KokoroWorker {
 function kokoroEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    KOKORO_READER_DEVICE: process.env.KOKORO_READER_DEVICE ?? process.env.DIFFSTORY_KOKORO_DEVICE ?? 'cpu',
+    ALOUD_DEVICE: process.env.ALOUD_DEVICE ?? process.env.DIFFSTORY_KOKORO_DEVICE ?? 'cpu',
     DIFFSTORY_KOKORO_DEVICE: process.env.DIFFSTORY_KOKORO_DEVICE ?? 'cpu',
     PYTORCH_ENABLE_MPS_FALLBACK: process.env.PYTORCH_ENABLE_MPS_FALLBACK ?? '1',
   };

@@ -56,7 +56,9 @@ test('native menu bar helper talks to the lightweight daemon', () => {
   assert.match(source, /request\(path: "speak", method: "POST"/);
   assert.match(source, /request\(path: "mode", method: "POST"/);
   assert.match(source, /request\(path: "rate", method: "POST"/);
-  assert.match(source, /request\(path: "voice", method: "POST"/);
+  assert.match(source, /request\(path: "settings", method: "POST"/);
+  assert.match(source, /Voice Model/);
+  assert.match(source, /Pocket TTS/);
   assert.match(source, /request\(path: "accessibility", method: "POST"/);
   assert.match(source, /let interval = isRunning \? 0\.75 : 5\.0/);
   assert.match(source, /withTimeInterval: 60/);
@@ -96,8 +98,8 @@ test('native menu bar helper reads clipboard text through the daemon', () => {
   assert.match(source, /Clipboard has no readable text\./);
 });
 
-test('native menu bar helper is stored under Kokoro Reader support files', () => {
+test('native menu bar helper is stored under Aloud support files', () => {
   const paths = nativeMenuBarPaths('/tmp/kokoro-home');
-  assert.equal(paths.executable, '/tmp/kokoro-home/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar');
-  assert.equal(paths.source, '/tmp/kokoro-home/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar.swift');
+  assert.equal(paths.executable, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBar');
+  assert.equal(paths.source, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBar.swift');
 });

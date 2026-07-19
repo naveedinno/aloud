@@ -87,8 +87,8 @@ test('clean-room app, DMG, install, and uninstall keep paths stable and scoped',
       'scripts/clean.sh',
       'scripts/install-macos-service.sh',
       'scripts/uninstall-macos-service.sh',
-      'scripts/setup-kokoro.sh',
-      'scripts/run-kokoro-reader.sh',
+      'scripts/setup-aloud.sh',
+      'scripts/run-aloud.sh',
       'scripts/stop-owned-daemon.sh',
       'packaging/macos/node.entitlements',
     ]) {
@@ -103,10 +103,11 @@ test('clean-room app, DMG, install, and uninstall keep paths stable and scoped',
     writeFileSync(join(fixture, 'assets', 'fixture.txt'), 'asset\n');
     writeFileSync(join(fixture, 'README.md'), '# Fixture\n');
     writeFileSync(join(fixture, 'requirements-kokoro-py312.lock.txt'), 'kokoro==0.9.4\n');
+    writeFileSync(join(fixture, 'requirements-pocket-py312.lock.txt'), 'pocket-tts==2.1.0\n');
     writeFileSync(join(fixture, 'package.json'), JSON.stringify({ name: 'fixture', version }));
     const nodeLicense = join(root, 'Node-LICENSE');
     writeFileSync(nodeLicense, 'Fixture Node.js license and third-party notices\n');
-    const legacyDaemonScript = join(root, 'Volumes', 'Kokoro Reader.app', 'Contents', 'Resources', 'app', 'dist', 'cli.js');
+    const legacyDaemonScript = join(root, 'Volumes', 'Aloud.app', 'Contents', 'Resources', 'app', 'dist', 'cli.js');
     mkdirSync(dirname(legacyDaemonScript), { recursive: true });
     writeFileSync(legacyDaemonScript, `const http = require('node:http');
 const server = http.createServer((_request, response) => response.end('legacy'));
@@ -123,7 +124,7 @@ case "\${1:-}" in
   -p) printf '${version}\\n'; exit 0 ;;
 esac
 if [[ "\${2:-}" == "prepare-menubar" ]]; then
-  helper="$HOME/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar"
+  helper="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
   mkdir -p "$(dirname "$helper")"
   printf '#!/usr/bin/env bash\\nexit 0\\n' > "$helper"
   printf 'import Foundation\\nprint("fixture")\\n' > "$helper.swift"
@@ -164,7 +165,7 @@ printf '%s %s\\n' "$HF_HUB_OFFLINE" "$TRANSFORMERS_OFFLINE" > ${JSON.stringify(s
 printf '{"modelRevision":"%s","pythonVersion":"3.12","schemaVersion":1,"status":"complete"}\\n' "$MODEL_REVISION" > "$SETUP_MANIFEST_TEMP"
 chmod 600 "$SETUP_MANIFEST_TEMP"
 `);
-    run('bash', ['scripts/setup-kokoro.sh'], {
+    run('bash', ['scripts/setup-aloud.sh'], {
       cwd: fixture,
       env: {
         ...process.env,
@@ -175,7 +176,7 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
       },
     });
     assert.equal(readFileSync(setupOnlineLog, 'utf8').trim(), '0 0');
-    const setupManifestPath = join(setupHome, 'Library', 'Application Support', 'Kokoro Reader', 'setup-manifest.json');
+    const setupManifestPath = join(setupHome, 'Library', 'Application Support', 'Aloud', 'setup-manifest.json');
     const setupManifest = readFileSync(setupManifestPath, 'utf8');
     assert.deepEqual(JSON.parse(setupManifest), {
       modelRevision: 'f3ff3571791e39611d31c381e3a41a3af07b4987',
@@ -183,9 +184,9 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
       schemaVersion: 1,
       status: 'complete',
     });
-    const setupVenv = join(setupHome, 'Library', 'Application Support', 'Kokoro Reader', 'kokoro-venv');
+    const setupVenv = join(setupHome, 'Library', 'Application Support', 'Aloud', 'kokoro-venv');
     writeFileSync(join(setupVenv, 'previous-environment'), 'preserve on failed rebuild\n');
-    const failedSetup = spawnSync('bash', ['scripts/setup-kokoro.sh'], {
+    const failedSetup = spawnSync('bash', ['scripts/setup-aloud.sh'], {
       cwd: fixture,
       encoding: 'utf8',
       env: {
@@ -219,29 +220,30 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
       NODE_SOURCE: fakeNode,
       PATH: `${fakeBin}:${process.env.PATH}`,
     };
-    mkdirSync(join(fixture, 'build', 'Kokoro Reader.app', 'Contents', 'Resources', 'app', 'dist'), { recursive: true });
-    writeFileSync(join(fixture, 'build', 'Kokoro Reader.app', 'Contents', 'Resources', 'app', 'dist', 'stale.js'), 'stale');
-    writeFileSync(join(fixture, 'build', 'Kokoro Reader.zip'), 'stale');
+    mkdirSync(join(fixture, 'build', 'Aloud.app', 'Contents', 'Resources', 'app', 'dist'), { recursive: true });
+    writeFileSync(join(fixture, 'build', 'Aloud.app', 'Contents', 'Resources', 'app', 'dist', 'stale.js'), 'stale');
+    writeFileSync(join(fixture, 'build', 'Aloud.zip'), 'stale');
 
     run('bash', ['scripts/build-macos-app.sh'], { cwd: fixture, env });
-    const app = join(fixture, 'build', 'Kokoro Reader.app');
-    const zip = join(fixture, 'build', `Kokoro Reader-${version}-macos-${hostArch}.zip`);
+    const app = join(fixture, 'build', 'Aloud.app');
+    const zip = join(fixture, 'build', `Aloud-${version}-macos-${hostArch}.zip`);
     assert.ok(existsSync(app));
     assert.ok(existsSync(zip));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'scripts', 'uninstall-macos-service.sh')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'requirements-kokoro-py312.lock.txt')));
+    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'requirements-pocket-py312.lock.txt')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'bin', 'node')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'LICENSE')));
-    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'native', 'KokoroReaderMenuBar')));
+    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'native', 'AloudMenuBar')));
     assert.equal(readFileSync(join(app, 'Contents', 'Resources', 'runtime-architecture.txt'), 'utf8').trim(), hostArch);
     assert.ok(!existsSync(join(app, 'Contents', 'Resources', 'app', 'dist', 'stale.js')));
-    assert.ok(!existsSync(join(fixture, 'build', 'Kokoro Reader.zip')));
+    assert.ok(!existsSync(join(fixture, 'build', 'Aloud.zip')));
 
-    writeFileSync(join(fixture, 'build', 'Kokoro Reader.dmg'), 'stale');
+    writeFileSync(join(fixture, 'build', 'Aloud.dmg'), 'stale');
     run('bash', ['scripts/build-macos-dmg.sh'], { cwd: fixture, env });
-    const dmg = join(fixture, 'build', `Kokoro Reader-${version}-macos-${hostArch}.dmg`);
+    const dmg = join(fixture, 'build', `Aloud-${version}-macos-${hostArch}.dmg`);
     assert.ok(existsSync(dmg));
-    assert.ok(!existsSync(join(fixture, 'build', 'Kokoro Reader.dmg')));
+    assert.ok(!existsSync(join(fixture, 'build', 'Aloud.dmg')));
     assert.ok(!existsSync(join(fixture, 'build', 'dmg-staging')));
 
     const packagedRoot = join(app, 'Contents', 'Resources', 'app');
@@ -249,10 +251,10 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
     const installEnv = {
       ...env,
       HOME: home,
-      KOKORO_READER_NODE: packagedNode,
-      KOKORO_READER_DAEMON_PORT: String(daemonPort),
-      KOKORO_READER_SKIP_REGISTRATION: '1',
-      KOKORO_READER_TMP_ROOT: fakeTmp,
+      ALOUD_NODE: packagedNode,
+      ALOUD_DAEMON_PORT: String(daemonPort),
+      ALOUD_SKIP_REGISTRATION: '1',
+      ALOUD_TMP_ROOT: fakeTmp,
     };
     const unmanagedBeforeInstall = await startUnmanagedDaemon(legacyDaemonScript, daemonPort);
     childProcesses.push(unmanagedBeforeInstall);
@@ -281,15 +283,15 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     unrelatedDaemon.kill('SIGTERM');
     await unrelatedExit;
 
-    const support = join(home, 'Library', 'Application Support', 'Kokoro Reader');
+    const support = join(home, 'Library', 'Application Support', 'Aloud');
     const runtime = join(support, 'runtime', 'current');
-    const daemonPlist = join(home, 'Library', 'LaunchAgents', 'local.kokoro-reader.daemon.plist');
-    const workflow = join(home, 'Library', 'Services', 'Read Aloud with Kokoro.workflow', 'Contents', 'document.wflow');
+    const daemonPlist = join(home, 'Library', 'LaunchAgents', 'local.aloud.daemon.plist');
+    const workflow = join(home, 'Library', 'Services', 'Read Selection Aloud.workflow', 'Contents', 'document.wflow');
     assert.ok(existsSync(join(runtime, 'node', 'bin', 'node')));
     assert.ok(existsSync(join(runtime, 'dist', 'cli.js')));
-    assert.match(readFileSync(daemonPlist, 'utf8'), /Application Support\/Kokoro Reader\/runtime\/current/);
+    assert.match(readFileSync(daemonPlist, 'utf8'), /Application Support\/Aloud\/runtime\/current/);
     assert.doesNotMatch(readFileSync(daemonPlist, 'utf8'), /source from mounted image/);
-    assert.match(readFileSync(workflow, 'utf8'), /Application Support\/Kokoro Reader\/runtime\/current/);
+    assert.match(readFileSync(workflow, 'utf8'), /Application Support\/Aloud\/runtime\/current/);
     assert.doesNotMatch(readFileSync(workflow, 'utf8'), /source from mounted image/);
 
     const stableFakeBin = join(root, 'stable-runtime-bin');
@@ -298,7 +300,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
       ...installEnv,
       PATH: `${stableFakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
     };
-    delete stableRepairEnv.KOKORO_READER_NODE;
+    delete stableRepairEnv.ALOUD_NODE;
     run('bash', [join(runtime, 'scripts', 'install-macos-service.sh')], { cwd: fixture, env: stableRepairEnv });
 
     const firstPayloadId = readFileSync(join(runtime, 'payload.sha256'), 'utf8').trim();
@@ -320,8 +322,8 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     const unmanagedUninstallExit = new Promise((resolve) => unmanagedBeforeUninstall.once('exit', resolve));
     run('bash', [join(packagedRoot, 'scripts', 'uninstall-macos-service.sh')], { cwd: fixture, env: installEnv });
     await unmanagedUninstallExit;
-    assert.ok(!existsSync(join(home, 'Library', 'LaunchAgents', 'local.kokoro-reader.daemon.plist')));
-    assert.ok(!existsSync(join(home, 'Library', 'Services', 'Read Aloud with Kokoro.workflow')));
+    assert.ok(!existsSync(join(home, 'Library', 'LaunchAgents', 'local.aloud.daemon.plist')));
+    assert.ok(!existsSync(join(home, 'Library', 'Services', 'Read Selection Aloud.workflow')));
     assert.ok(!existsSync(join(support, 'runtime')));
     assert.ok(existsSync(join(support, 'keep-me.txt')));
     assert.ok(existsSync(join(unrelatedService, 'sentinel')));

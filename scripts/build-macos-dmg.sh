@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_DIR/build"
-APP_NAME="Kokoro Reader"
+APP_NAME="Aloud"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
 SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:--}"

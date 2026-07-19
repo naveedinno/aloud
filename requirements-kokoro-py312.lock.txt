@@ -1,4 +1,4 @@
-# Kokoro Reader Python 3.12 lock, captured from the verified macOS runtime.
+# Aloud Python 3.12 lock, captured from the verified macOS runtime.
 # Regenerate deliberately after testing speech generation on both supported Mac architectures.
 addict==2.4.0
 annotated-doc==0.0.4

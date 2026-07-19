@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createManagedKokoroSynthesizer, kokoroRate, kokoroVoiceLabel, kokoroVoiceOptions, normalizeKokoroVoice } from './kokoro-tts.js';
+import { kokoroRate } from './kokoro-tts.js';
 import type { SpeechControllerState } from './controller.js';
 import {
   DEFAULT_READER_PREFERENCES,
@@ -13,6 +13,15 @@ import {
   saveReaderPreferences,
   type GlobalShortcut,
 } from './preferences.js';
+import {
+  createManagedSpeechSynthesizer,
+  engineVoiceLabel,
+  engineVoiceOptions,
+  normalizeEngineVoice,
+  normalizeSpeechEngine,
+  type SpeechEngine,
+  type SpeechSynthesizer,
+} from './speech-engine.js';
 import {
   playAudio,
   speechBatchesForMode,
@@ -25,20 +34,19 @@ import {
   type SpeechPlayer,
   type SpeechChunkRange,
   type SpeechResult,
-  type SpeechSynthesizer,
 } from './speak.js';
 
 export const SPEECH_DAEMON_PORT = 17878;
 const DAEMON_URL = `http://127.0.0.1:${SPEECH_DAEMON_PORT}`;
 const RANDOM_VOICE = 'random';
-const DAEMON_VOICES = kokoroVoiceOptions().map((voice) => voice.id);
 const MAX_DAEMON_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_DAEMON_TEXT_CHARACTERS = 240_000;
-export const DAEMON_SERVICE = 'kokoro-reader-speech-daemon';
-export const DAEMON_PROTOCOL = 1;
+export const DAEMON_SERVICE = 'aloud-speech-daemon';
+export const DAEMON_PROTOCOL = 2;
 
 export interface SpeechDaemonRequest {
   batch?: boolean;
+  engine?: SpeechEngine;
   mode?: SpeechMode;
   prefetch?: number;
   rate?: number;
@@ -56,6 +64,8 @@ export interface SpeechDaemonStatus {
   canGoNext: boolean;
   canGoPrevious: boolean;
   canReplay: boolean;
+  engine: SpeechEngine;
+  engineLabel: string;
   mode: SpeechMode;
   modeLabel: string;
   jobId?: string;
@@ -73,6 +83,7 @@ export interface SpeechDaemonStatus {
 }
 
 export interface SpeechDaemonSettings {
+  engine?: string;
   mode?: string;
   rate?: number;
   shortcut?: string;
@@ -120,9 +131,9 @@ export function createSerializedExecutor(): SerializedExecutor {
 export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Promise<ReturnType<typeof createServer>> {
   const home = options.home ?? homedir();
   const storedPreferences = loadReaderPreferences(home);
-  const synthesizer = options.synthesize ? undefined : createManagedKokoroSynthesizer(home, { workers: 1 });
+  const synthesizer = options.synthesize ? undefined : createManagedSpeechSynthesizer(home);
   const synthesize: SpeechSynthesizer = options.synthesize
-    ?? ((_home, input, opts) => synthesizer!.synthesize(input, opts));
+    ?? ((requestHome, input, opts) => synthesizer!.synthesize(requestHome, input, opts));
   const player = options.player ?? playAudio;
   const serializeMutation = createSerializedExecutor();
   let accessibilityTrusted: boolean | undefined;
@@ -130,6 +141,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
   let currentChunks: string[] = [];
   let currentGeneration = 0;
   let currentChunkIndex = 0;
+  let currentEngine = normalizeSpeechEngine(storedPreferences.engine ?? DEFAULT_READER_PREFERENCES.engine);
   let currentJob: Promise<void> | undefined;
   let currentJobId: string | undefined;
   let currentMode: SpeechMode = speechMode(storedPreferences.mode ?? DEFAULT_READER_PREFERENCES.mode);
@@ -139,7 +151,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
   let currentRequest: SpeechDaemonRequest | undefined;
   let currentShortcut = normalizeGlobalShortcut(storedPreferences.shortcut);
   let currentStartAt = 0;
-  let currentVoice = normalizeDaemonVoice(storedPreferences.voice ?? DEFAULT_READER_PREFERENCES.voice);
+  let currentVoice = normalizeDaemonVoice(currentEngine, storedPreferences.voice ?? DEFAULT_READER_PREFERENCES.voice);
   let currentState: SpeechDaemonState = { message: 'Ready', rate: currentRate, status: 'done' };
 
   const updateState = (state: Partial<SpeechDaemonState>) => {
@@ -147,6 +159,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
   };
 
   const persistPreferences = () => saveReaderPreferences(home, {
+    engine: currentEngine,
     mode: currentMode,
     rate: currentRate,
     shortcut: currentShortcut,
@@ -160,6 +173,8 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       canGoNext: currentChunks.length > 1 && currentIndex < currentChunks.length - 1,
       canGoPrevious: currentChunks.length > 1 && currentIndex > 0,
       canReplay: currentChunks.length > 0,
+      engine: currentEngine,
+      engineLabel: currentEngine === 'pocket' ? 'Pocket TTS' : 'Kokoro',
       mode: currentMode,
       modeLabel: speechModeLabel(currentMode),
       jobId: currentJobId,
@@ -173,7 +188,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       protocolVersion: DAEMON_PROTOCOL,
       state: currentState,
       voice: currentVoice,
-      voiceLabel: daemonVoiceLabel(currentVoice),
+      voiceLabel: daemonVoiceLabel(currentEngine, currentVoice),
     };
   };
 
@@ -212,9 +227,10 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
     currentChunkIndex = currentStartAt;
     const jobInput: SpeechDaemonRequest = {
       ...input,
+      engine: currentEngine,
       mode: currentMode,
       rate: currentRate,
-      voice: selectedDaemonVoice(currentVoice),
+      voice: selectedDaemonVoice(currentEngine, currentVoice),
     };
     const startRange = chunkRanges[currentStartAt];
     updateState({
@@ -276,10 +292,14 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       }
       if (request.method === 'POST' && request.url === '/settings') {
         const body = await readJson<SpeechDaemonSettings>(request);
+        if (body.engine !== undefined) {
+          currentEngine = normalizeSpeechEngine(body.engine);
+          currentVoice = normalizeDaemonVoice(currentEngine, undefined);
+        }
         if (body.mode !== undefined) currentMode = speechMode(body.mode);
         if (body.rate !== undefined) currentRate = kokoroRate(body.rate);
         if (body.shortcut !== undefined) currentShortcut = normalizeGlobalShortcut(body.shortcut);
-        if (body.voice !== undefined) currentVoice = normalizeDaemonVoice(body.voice);
+        if (body.voice !== undefined) currentVoice = normalizeDaemonVoice(currentEngine, body.voice);
         updateState({ rate: currentRate });
         persistPreferences();
         return sendJson(response, statusBody());
@@ -293,7 +313,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       }
       if (request.method === 'POST' && request.url === '/voice') {
         const body = await readJson<{ voice?: string }>(request);
-        currentVoice = normalizeDaemonVoice(body.voice);
+        currentVoice = normalizeDaemonVoice(currentEngine, body.voice);
         persistPreferences();
         return sendJson(response, statusBody());
       }
@@ -377,8 +397,9 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
           stopCurrent();
           await currentJob;
           currentMode = speechMode(body.mode ?? currentMode);
+          currentEngine = normalizeSpeechEngine(body.engine ?? currentEngine);
           currentRate = kokoroRate(body.rate ?? currentRate);
-          currentVoice = normalizeDaemonVoice(body.voice ?? currentVoice);
+          currentVoice = normalizeDaemonVoice(currentEngine, body.voice ?? currentVoice);
           currentShortcut = normalizeGlobalShortcut(currentShortcut);
           persistPreferences();
           const chunks = body.batch === false ? [text] : speechBatchesForMode(text, currentMode);
@@ -464,6 +485,7 @@ async function speakDaemonJob(
       batches,
       home,
       mode: input.mode,
+      engine: input.engine,
       onPlaybackHandle,
       onProgress: (progress) => {
         const range = chunkRanges[progress.index];
@@ -503,7 +525,7 @@ async function startSpeechDaemon(): Promise<void> {
   const existingHealth = await daemonHealthResponse();
   if (isSpeechDaemonHealth(existingHealth)) return;
   if (existingHealth !== undefined) {
-    throw new Error('An older or incompatible Kokoro Reader daemon is running. Restart Services from Mac connection to upgrade it safely.');
+    throw new Error('An older or incompatible Aloud daemon is running. Restart Services from Mac connection to upgrade it safely.');
   }
   const cliPath = process.argv[1];
   const child = spawn(process.execPath, [cliPath, 'daemon'], {
@@ -720,18 +742,19 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeDaemonVoice(voice?: string): string {
+function normalizeDaemonVoice(engine: SpeechEngine, voice?: string): string {
   const value = String(voice ?? '').toLowerCase().trim().replace(/[\s-]+/g, '_');
-  return value === RANDOM_VOICE ? RANDOM_VOICE : normalizeKokoroVoice(value);
+  return value === RANDOM_VOICE ? RANDOM_VOICE : normalizeEngineVoice(engine, value);
 }
 
-function daemonVoiceLabel(voice?: string): string {
-  return voice === RANDOM_VOICE ? 'Random' : kokoroVoiceLabel(voice);
+function daemonVoiceLabel(engine: SpeechEngine, voice?: string): string {
+  return voice === RANDOM_VOICE ? 'Random' : engineVoiceLabel(engine, voice);
 }
 
-function selectedDaemonVoice(voice?: string): string {
-  if (voice !== RANDOM_VOICE) return normalizeKokoroVoice(voice);
-  return DAEMON_VOICES[Math.floor(Math.random() * DAEMON_VOICES.length)] ?? normalizeKokoroVoice('af_heart');
+function selectedDaemonVoice(engine: SpeechEngine, voice?: string): string {
+  if (voice !== RANDOM_VOICE) return normalizeEngineVoice(engine, voice);
+  const voices = engineVoiceOptions(engine);
+  return voices[Math.floor(Math.random() * voices.length)]?.id ?? normalizeEngineVoice(engine);
 }
 
 function speechModeLabel(mode: SpeechMode): string {

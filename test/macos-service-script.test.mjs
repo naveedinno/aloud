@@ -7,7 +7,7 @@ const installer = read('../scripts/install-macos-service.sh');
 const uninstaller = read('../scripts/uninstall-macos-service.sh');
 const appBuilder = read('../scripts/build-macos-app.sh');
 const dmgBuilder = read('../scripts/build-macos-dmg.sh');
-const setup = read('../scripts/setup-kokoro.sh');
+const setup = read('../scripts/setup-aloud.sh');
 const clean = read('../scripts/clean.sh');
 const stopOwnedDaemon = read('../scripts/stop-owned-daemon.sh');
 const requirementsLock = read('../requirements-kokoro-py312.lock.txt');
@@ -15,8 +15,8 @@ const packageJson = JSON.parse(read('../package.json'));
 
 test('macOS service installer creates all owned workflows', () => {
   assert.match(installer, /local workflow_dir="\$SERVICES_DIR\/\$service_name\.workflow"/);
-  assert.match(installer, /install_workflow "Read Aloud with Kokoro"/);
-  assert.match(installer, /install_workflow "Stop Kokoro Reader"/);
+  assert.match(installer, /install_workflow "Read Selection Aloud"/);
+  assert.match(installer, /install_workflow "Stop Aloud"/);
   assert.match(installer, /"Heart\|af_heart"/);
   assert.match(installer, /"Daniel\|bm_daniel"/);
   assert.match(installer, /"Slow\|0\.8"/);
@@ -30,7 +30,7 @@ test('macOS service installer persists only its stable private runtime', () => {
   assert.match(installer, /RUNTIME_VERSION_DIR="\$RUNTIME_ROOT\/\$PACKAGE_VERSION"/);
   assert.match(installer, /RUNTIME_CURRENT="\$RUNTIME_ROOT\/current"/);
   assert.match(installer, /Installing a stable private runtime/);
-  assert.match(installer, /KOKORO_READER_NODE/);
+  assert.match(installer, /ALOUD_NODE/);
   assert.match(installer, /"\$SOURCE_ROOT\/node\/bin\/node" "\$SOURCE_ROOT\/\.\.\/node\/bin\/node"/);
   assert.match(installer, /cp "\$SOURCE_NODE" "\$staging_dir\/node\/bin\/node"/);
   assert.match(installer, /APP_EXECUTABLE="\$RUNTIME_CURRENT\/dist\/cli\.js"/);
@@ -43,11 +43,20 @@ test('macOS service installer persists only its stable private runtime', () => {
   assert.doesNotMatch(installer, /<string>.*AppTranslocation/);
 });
 
+test('Aloud installer migrates the former product identity without discarding local data', () => {
+  assert.match(installer, /LEGACY_APP_SUPPORT=.*Application Support\/Kokoro Reader/);
+  assert.match(installer, /mv "\$LEGACY_APP_SUPPORT" "\$APP_SUPPORT"/);
+  assert.match(installer, /local\.kokoro-reader\.daemon/);
+  assert.match(installer, /Read Aloud with Kokoro\.workflow/);
+  assert.match(stopOwnedDaemon, /Kokoro Reader\.app\/Contents\/Resources\/app\/dist\/cli\.js daemon/);
+  assert.ok(installer.indexOf('migrate_legacy_install') < installer.indexOf('install_runtime_payload'));
+});
+
 test('Services and LaunchAgents use scoped stop behavior and private logs', () => {
   assert.match(installer, /\$APP_EXECUTABLE" stop-daemon/);
   assert.doesNotMatch(installer, /\bpkill\b/);
   assert.doesNotMatch(installer, /\bkillall\b/);
-  assert.doesNotMatch(installer, /\/tmp\/kokoro-reader-(daemon|menubar)/);
+  assert.doesNotMatch(installer, /\/tmp\/aloud-(daemon|menubar)/);
   assert.match(installer, /\$LOGS_DIR\/daemon\.log/);
   assert.match(installer, /\$LOGS_DIR\/menubar\.log/);
   assert.match(installer, /launchctl bootstrap/);
@@ -60,30 +69,30 @@ test('Services and LaunchAgents use scoped stop behavior and private logs', () =
   assert.match(stopOwnedDaemon, /shutdown-daemon/);
   assert.match(stopOwnedDaemon, /lsof.*-iTCP:/s);
   assert.match(stopOwnedDaemon, /is_owned_command/);
-  assert.match(stopOwnedDaemon, /Kokoro Reader\.app\/Contents\/Resources\/app\/dist\/cli\.js daemon/);
+  assert.match(stopOwnedDaemon, /Aloud\.app\/Contents\/Resources\/app\/dist\/cli\.js daemon/);
   assert.match(stopOwnedDaemon, /kill -TERM "\$pid"/);
   assert.match(stopOwnedDaemon, /kill -KILL "\$pid"/);
   assert.doesNotMatch(stopOwnedDaemon, /\bpkill\b|\bkillall\b/);
   assert.ok(stopOwnedDaemon.indexOf('is_owned_command "$command"') < stopOwnedDaemon.indexOf('shutdown-daemon'));
 });
 
-test('uninstaller removes only named Kokoro Reader resources', () => {
+test('uninstaller removes only named Aloud resources', () => {
   assert.match(packageJson.scripts['uninstall:macos-service'], /uninstall-macos-service\.sh/);
-  assert.match(uninstaller, /local\.kokoro-reader\.daemon/);
-  assert.match(uninstaller, /local\.kokoro-reader\.menubar/);
-  assert.match(uninstaller, /"Read Aloud with Kokoro"/);
+  assert.match(uninstaller, /local\.aloud\.daemon/);
+  assert.match(uninstaller, /local\.aloud\.menubar/);
+  assert.match(uninstaller, /"Read Selection Aloud"/);
   assert.match(uninstaller, /"Kokoro Speaker - Daniel"/);
   assert.match(uninstaller, /"\$APP_SUPPORT\/tts-cache"/);
   assert.match(uninstaller, /"\$APP_SUPPORT\/preferences\.json"/);
   assert.match(uninstaller, /"\$APP_SUPPORT\/setup-manifest\.json"/);
   assert.match(uninstaller, /Refusing to remove an unexpected Application Support path/);
-  assert.ok(uninstaller.indexOf('unsafe HOME directory') < uninstaller.indexOf('remove_launch_agent "local.kokoro-reader.menubar"'));
+  assert.ok(uninstaller.indexOf('unsafe HOME directory') < uninstaller.indexOf('remove_launch_agent "local.aloud.menubar"'));
   assert.doesNotMatch(uninstaller, /\bpkill\b|\bkillall\b/);
   assert.doesNotMatch(uninstaller, /rm -rf ["']?\$HOME["']?\s/);
 });
 
 test('Kokoro setup is Python 3.12, dependency, and model revision locked', () => {
-  assert.equal(packageJson.scripts['setup:kokoro'], 'bash scripts/setup-kokoro.sh');
+  assert.equal(packageJson.scripts['setup:aloud'], 'bash scripts/setup-aloud.sh');
   assert.match(setup, /Python 3\.12/);
   assert.match(setup, /requirements-kokoro-py312\.lock\.txt/);
   assert.match(setup, /pip==\$PIP_VERSION/);
@@ -96,12 +105,16 @@ test('Kokoro setup is Python 3.12, dependency, and model revision locked', () =>
   assert.match(setup, /mv "\$SETUP_MANIFEST" "\$SETUP_MANIFEST_BACKUP"/);
   assert.match(setup, /restore_previous_setup/);
   assert.match(setup, /setup-manifest\.json/);
-  assert.match(setup, /"schemaVersion": 1/);
+  assert.match(setup, /"schemaVersion": 2/);
+  assert.match(setup, /pocket-tts/);
+  assert.match(setup, /POCKET_REQUIREMENTS_LOCK/);
   assert.match(setup, /"status": "complete"/);
   assert.match(setup, /"requirementsLockSha256"/);
   assert.match(setup, /mv -f "\$SETUP_MANIFEST_TEMP" "\$SETUP_MANIFEST"/);
   assert.match(setup, /snapshot_download\(repo_id=repo_id, revision=revision/);
   assert.match(setup, /refs_dir \/ "main"/);
+  assert.match(setup, /write_text\(revision, encoding="utf-8"\)/);
+  assert.doesNotMatch(setup, /write_text\(f"\{revision\}\\n"/);
   assert.match(requirementsLock, /^kokoro==0\.9\.4$/m);
   assert.match(requirementsLock, /^soundfile==0\.14\.0$/m);
   assert.match(requirementsLock, /^torch==2\.12\.1$/m);
@@ -118,9 +131,9 @@ test('builds clean generated JavaScript before compiling', () => {
 test('macOS app builder packages the complete bundled runtime', () => {
   assert.match(appBuilder, /requirements-kokoro-py312\.lock\.txt/);
   assert.match(appBuilder, /uninstall-macos-service\.sh/);
-  assert.match(appBuilder, /run-kokoro-reader\.sh/);
+  assert.match(appBuilder, /run-aloud\.sh/);
   assert.match(appBuilder, /Resources\/node\/bin/);
-  assert.match(appBuilder, /native\/KokoroReaderMenuBar/);
+  assert.match(appBuilder, /native\/AloudMenuBar/);
   assert.match(appBuilder, /NODE_LICENSE_FILE/);
   assert.match(appBuilder, /node\/LICENSE/);
   assert.match(appBuilder, /payload\.sha256/);

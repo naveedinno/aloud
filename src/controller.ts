@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { kokoroRate, kokoroReaderSupportDir } from './kokoro-tts.js';
+import { kokoroRate, aloudSupportDir } from './kokoro-tts.js';
 
 export type SpeechControllerStatus = 'starting' | 'generating' | 'reading' | 'done' | 'stopped' | 'error';
 
@@ -116,7 +116,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.level = .floating
         panel.becomesKeyOnlyIfNeeded = true
-        panel.setAccessibilityLabel("Kokoro Reader playback controller")
+        panel.setAccessibilityLabel("Aloud playback controller")
         panel.orderFrontRegardless()
 
         let root = NSView(frame: NSRect(x: 0, y: 0, width: ${OVERLAY_WIDTH}, height: ${OVERLAY_HEIGHT}))
@@ -149,7 +149,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         blur.layer?.masksToBounds = true
         surface.addSubview(blur)
 
-        titleLabel = label("Kokoro Reader", x: 18, y: 100, width: 210, height: 18, size: 13, weight: .semibold, color: NSColor.white.withAlphaComponent(0.94))
+        titleLabel = label("Aloud", x: 18, y: 100, width: 210, height: 18, size: 13, weight: .semibold, color: NSColor.white.withAlphaComponent(0.94))
         messageLabel = label("Preparing selected text", x: 18, y: 79, width: 288, height: 18, size: 12, weight: .regular, color: NSColor.white.withAlphaComponent(0.66))
         statusLabel = label("Starting", x: 38, y: 14, width: 150, height: 16, size: 11, weight: .medium, color: NSColor.white.withAlphaComponent(0.58))
         countLabel = label("", x: 346, y: 14, width: 52, height: 16, size: 11, weight: .medium, color: NSColor.white.withAlphaComponent(0.58), alignment: .right)
@@ -546,7 +546,7 @@ export function controllerWindowCommand(
         '--new-window',
         '--no-first-run',
         '--disable-extensions',
-        `--user-data-dir=${opts.userDataDir ?? join('/tmp', 'kokoro-reader-controller-chrome')}`,
+        `--user-data-dir=${opts.userDataDir ?? join('/tmp', 'aloud-controller-chrome')}`,
         `--window-size=${WINDOW_WIDTH},${WINDOW_HEIGHT}`,
         `--window-position=${WINDOW_X},${WINDOW_Y}`,
       ],
@@ -573,11 +573,11 @@ export function prepareNativeSpeechOverlay(home = homedir()): string | undefined
 }
 
 export function nativeSpeechOverlayPaths(home = homedir()): { dir: string; executable: string; source: string } {
-  const dir = join(kokoroReaderSupportDir(home), 'controller');
+  const dir = join(aloudSupportDir(home), 'controller');
   return {
     dir,
-    executable: join(dir, 'KokoroReaderOverlay'),
-    source: join(dir, 'KokoroReaderOverlay.swift'),
+    executable: join(dir, 'AloudOverlay'),
+    source: join(dir, 'AloudOverlay.swift'),
   };
 }
 
@@ -591,7 +591,7 @@ export function speechControllerHtml(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kokoro Reader</title>
+  <title>Aloud</title>
   <style>
     :root {
       color-scheme: dark;
@@ -737,7 +737,7 @@ export function speechControllerHtml(): string {
   <main>
     <div class="top">
       <div>
-        <h1>Kokoro Reader</h1>
+        <h1>Aloud</h1>
         <div id="message" role="status" aria-live="polite">Preparing selected text</div>
       </div>
       <div class="actions">
@@ -884,7 +884,7 @@ function listenLocal(server: Server): Promise<string> {
       server.off('error', reject);
       const address = server.address();
       if (!address || typeof address === 'string') {
-        reject(new Error('Could not start Kokoro Reader controller.'));
+        reject(new Error('Could not start Aloud controller.'));
         return;
       }
       resolve(`http://127.0.0.1:${address.port}`);
@@ -912,7 +912,7 @@ function localControllerRequestError(request: IncomingMessage): { message: strin
   const port = request.socket.localPort;
   const host = String(request.headers.host ?? '').trim().toLowerCase();
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-  if (!allowedHosts.has(host)) return { message: 'Kokoro Reader only accepts local controller requests.', status: 403 };
+  if (!allowedHosts.has(host)) return { message: 'Aloud only accepts local controller requests.', status: 403 };
 
   const origin = String(request.headers.origin ?? '').trim();
   if (origin) {

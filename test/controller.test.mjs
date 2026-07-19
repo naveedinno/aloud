@@ -9,7 +9,7 @@ import {
 
 test('speech controller HTML presents progress and stop controls', () => {
   const html = speechControllerHtml();
-  assert.match(html, /Kokoro Reader/);
+  assert.match(html, /Aloud/);
   assert.match(html, /id="stop"/);
   assert.match(html, />Stop</);
   assert.match(html, /id="bar"/);
@@ -63,10 +63,10 @@ test('speech controller uses a capability URL and rejects unsafe requests', asyn
 
 test('controller window prefers the native macOS overlay when available', () => {
   assert.deepEqual(controllerWindowCommand('http://127.0.0.1:1234', {
-    nativeOverlayExecutable: '/tmp/KokoroReaderOverlay',
+    nativeOverlayExecutable: '/tmp/AloudOverlay',
     platform: 'darwin',
   }), {
-    command: '/tmp/KokoroReaderOverlay',
+    command: '/tmp/AloudOverlay',
     args: ['http://127.0.0.1:1234'],
   });
 });

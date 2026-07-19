@@ -20,15 +20,12 @@ import {
 } from './daemon.js';
 import {
   clearKokoroTtsCache,
-  createManagedKokoroSynthesizer,
   isValidKokoroCacheFile,
   isKokoroTtsId,
   kokoroTtsCacheStats,
   kokoroTtsCacheDir,
   markKokoroCacheUsed,
   synthesizeWithKokoro,
-  type KokoroTtsRequest,
-  type KokoroTtsCacheEntry,
 } from './kokoro-tts.js';
 import { splitTextIntoSpeechBatches } from './speak.js';
 import {
@@ -37,6 +34,24 @@ import {
   type ReaderSystemHealth,
   type SystemRepairAction,
 } from './system-health.js';
+import {
+  createVoiceExportManager,
+  type VoiceExportBackend,
+  type VoiceExportInput,
+} from './voice-export.js';
+import {
+  createManagedSpeechSynthesizer,
+  type SpeechSynthesisRequest,
+  type SpeechSynthesisResult,
+} from './speech-engine.js';
+import {
+  clearPocketTtsCache,
+  isPocketTtsId,
+  POCKET_CACHE_MAX_AGE_MS,
+  POCKET_CACHE_MAX_BYTES,
+  pocketTtsCacheDir,
+  pocketTtsCacheStats,
+} from './pocket-tts.js';
 
 export interface ServeOptions {
   home?: string;
@@ -49,13 +64,14 @@ export interface ServeOptions {
 }
 
 export interface HandleOptions {
+  exports?: VoiceExportBackend;
   home?: string;
   requireSession?: boolean;
   sessionToken?: string;
 }
 
-export type SynthResult = KokoroTtsCacheEntry & { cached: boolean; url: string };
-export type Synthesizer = (home: string, input: KokoroTtsRequest, opts?: { signal?: AbortSignal }) => Promise<SynthResult>;
+export type SynthResult = SpeechSynthesisResult;
+export type Synthesizer = (home: string, input: SpeechSynthesisRequest, opts?: { signal?: AbortSignal }) => Promise<SynthResult>;
 
 export interface ReaderBackend {
   control(action: SpeechDaemonControl): Promise<unknown>;
@@ -73,7 +89,7 @@ export interface SystemBackend {
 const DEFAULT_PORT = 7878;
 const LOOPBACK_HOST = '127.0.0.1';
 const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024;
-const SESSION_COOKIE = 'kokoro_reader_session';
+const SESSION_COOKIE = 'aloud_session';
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FONT_ASSETS = new Map([
   ['Manrope-Variable.ttf', 'Manrope-Variable.ttf'],
@@ -94,15 +110,16 @@ const localSystem: SystemBackend = {
 export function serve(options: ServeOptions = {}): Server {
   const home = options.home ?? homedir();
   const sessionToken = randomBytes(32).toString('base64url');
-  const managed = options.synthesize ? undefined : createManagedKokoroSynthesizer(home, { workers: 1 });
-  const synthesize = options.synthesize ?? ((_home: string, input: KokoroTtsRequest, opts?: { signal?: AbortSignal }) => managed!.synthesize(input, opts));
+  const managed = options.synthesize ? undefined : createManagedSpeechSynthesizer(home);
+  const synthesize = options.synthesize ?? managed!.synthesize;
+  const voiceExports = createVoiceExportManager(home, synthesize);
   const server = createServer((req, res) => handle(
     req,
     res,
     synthesize,
     options.reader ?? daemonReader,
     options.system ?? localSystem,
-    { home, requireSession: true, sessionToken },
+    { exports: voiceExports, home, requireSession: true, sessionToken },
   ));
   const port = options.port ?? DEFAULT_PORT;
   server.on('error', (err: NodeJS.ErrnoException) => {
@@ -119,13 +136,14 @@ export function serve(options: ServeOptions = {}): Server {
   const removeSignalHandlers = options.signals === false ? () => {} : installSignalCleanup(server);
   server.on('close', () => {
     removeSignalHandlers();
+    voiceExports.dispose();
     managed?.dispose();
   });
   server.listen(port, LOOPBACK_HOST, () => {
     const addr = server.address();
     const actualPort = typeof addr === 'object' && addr ? addr.port : port;
     const url = `http://localhost:${actualPort}/`;
-    console.log(`kokoro-reader ready -> ${url}`);
+    console.log(`aloud ready -> ${url}`);
     if (options.open !== false) openBrowser(url);
   });
   return server;
@@ -134,7 +152,10 @@ export function serve(options: ServeOptions = {}): Server {
 export function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  synthesize: Synthesizer = synthesizeWithKokoro,
+  synthesize: Synthesizer = async (home, input, opts) => ({
+    ...await synthesizeWithKokoro(home, input, opts),
+    engine: 'kokoro',
+  }),
   reader: ReaderBackend = daemonReader,
   system: SystemBackend = localSystem,
   options: HandleOptions = {},
@@ -186,17 +207,18 @@ export function handle(
     }));
   }
   if (req.method === 'GET' && url.pathname === '/api/system/cache') {
-    return sendJson(res, 200, publicCacheStats(kokoroTtsCacheStats(home)));
+    return sendJson(res, 200, publicCacheStats(allTtsCacheStats(home)));
   }
   if (req.method === 'POST' && url.pathname === '/api/system/cache') {
     return readBody(req, res, (body) => runJson(res, () => {
       const { action } = parseJson<{ action?: string }>(body);
       if (action !== 'clear') throw new Error('Unknown cache action.');
-      const result = clearKokoroTtsCache(home);
+      const kokoro = clearKokoroTtsCache(home);
+      const pocket = clearPocketTtsCache(home);
       return {
-        ...publicCacheStats(result),
-        removedBytes: result.removedBytes,
-        removedEntries: result.removedFiles,
+        ...publicCacheStats(allTtsCacheStats(home)),
+        removedBytes: kokoro.removedBytes + pocket.removedBytes,
+        removedEntries: kokoro.removedFiles + pocket.removedFiles,
       };
     }));
   }
@@ -220,8 +242,37 @@ export function handle(
   if (req.method === 'POST' && url.pathname === '/api/tts/kokoro/plan') {
     return readBody(req, res, (body) => planKokoroSpeech(res, body));
   }
+  if (req.method === 'POST' && url.pathname === '/api/exports') {
+    return readBody(req, res, (body) => runJson(res, () => {
+      if (!options.exports) throw new HttpStatusError(503, 'Voice file export is unavailable.');
+      const input = parseJson<VoiceExportInput>(body);
+      validateReaderText(input.text);
+      return options.exports.start(input);
+    }));
+  }
+  const exportRoute = /^\/api\/exports\/([a-f0-9-]+)(?:\/(file|cancel))?$/.exec(url.pathname);
+  if (exportRoute && req.method === 'GET' && !exportRoute[2]) {
+    const status = options.exports?.get(exportRoute[1]!);
+    if (!status) return sendJson(res, 404, { error: 'Voice export not found.' });
+    return sendJson(res, 200, status);
+  }
+  if (exportRoute && req.method === 'POST' && exportRoute[2] === 'cancel') {
+    return readBody(req, res, () => {
+      const status = options.exports?.cancel(exportRoute[1]!);
+      if (!status) return sendJson(res, 404, { error: 'Voice export not found.' });
+      return sendJson(res, 200, status);
+    });
+  }
+  if (exportRoute && req.method === 'GET' && exportRoute[2] === 'file') {
+    const file = options.exports?.file(exportRoute[1]!);
+    if (!file) return sendJson(res, 404, { error: 'Voice file is not ready.' });
+    return sendVoiceExportFile(res, file.path, file.filename);
+  }
   if (req.method === 'GET' && url.pathname.startsWith('/api/tts/kokoro/')) {
     return sendKokoroAudio(res, url.pathname.slice('/api/tts/kokoro/'.length), home);
+  }
+  if (req.method === 'GET' && url.pathname.startsWith('/api/tts/pocket/')) {
+    return sendPocketAudio(res, url.pathname.slice('/api/tts/pocket/'.length), home);
   }
   res.statusCode = 404;
   res.end('Not found');
@@ -344,6 +395,17 @@ function publicCacheStats(stats: { bytes: number; files: number; maxAgeMs: numbe
   return { bytes: stats.bytes, entries: stats.files, maxAgeMs: stats.maxAgeMs, maxBytes: stats.maxBytes };
 }
 
+function allTtsCacheStats(home: string): { bytes: number; files: number; maxAgeMs: number; maxBytes: number } {
+  const kokoro = kokoroTtsCacheStats(home);
+  const pocket = pocketTtsCacheStats(home);
+  return {
+    bytes: kokoro.bytes + pocket.bytes,
+    files: kokoro.files + pocket.files,
+    maxAgeMs: Math.max(kokoro.maxAgeMs, POCKET_CACHE_MAX_AGE_MS),
+    maxBytes: kokoro.maxBytes + POCKET_CACHE_MAX_BYTES,
+  };
+}
+
 function httpStatus(error: unknown): number {
   const status = Number((error as { statusCode?: number } | undefined)?.statusCode);
   return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 400;
@@ -410,6 +472,7 @@ function runKokoro(res: ServerResponse, body: string, synthesize: Synthesizer, h
   }
   const abort = speechAbortForResponse(res);
   synthesize(home, {
+    engine: 'kokoro',
     text: input.text ?? '',
     voice: input.voice,
     rate: input.rate,
@@ -436,13 +499,21 @@ function speechAbortForResponse(res: ServerResponse): AbortController {
 }
 
 function sendKokoroAudio(res: ServerResponse, file: string, home: string): void {
+  return sendCachedAudio(res, file, kokoroTtsCacheDir(home), isKokoroTtsId);
+}
+
+function sendPocketAudio(res: ServerResponse, file: string, home: string): void {
+  return sendCachedAudio(res, file, pocketTtsCacheDir(home), isPocketTtsId);
+}
+
+function sendCachedAudio(res: ServerResponse, file: string, dir: string, isValidId: (id: string) => boolean): void {
   const id = file.endsWith('.wav') ? file.slice(0, -4) : file;
-  if (!isKokoroTtsId(id)) {
+  if (!isValidId(id)) {
     res.statusCode = 404;
     res.end('Not found');
     return;
   }
-  const path = join(kokoroTtsCacheDir(home), `${id}.wav`);
+  const path = join(dir, `${id}.wav`);
   if (!existsSync(path) || !isValidKokoroCacheFile(path)) {
     res.statusCode = 404;
     res.end('Not found');
@@ -479,6 +550,34 @@ function sendKokoroAudio(res: ServerResponse, file: string, home: string): void 
       res.destroy();
     }
   });
+  stream.pipe(res);
+}
+
+function sendVoiceExportFile(res: ServerResponse, path: string, filename: string): void {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    sendJson(res, 404, { error: 'Voice file is no longer available.' });
+    return;
+  }
+  let stat: ReturnType<typeof fstatSync>;
+  try {
+    stat = fstatSync(fd);
+  } catch {
+    closeSync(fd);
+    sendJson(res, 404, { error: 'Voice file is no longer available.' });
+    return;
+  }
+  const fallback = filename.replace(/[^a-z0-9 ._-]+/gi, '').replace(/["\\]/g, '') || 'kokoro-reading.wav';
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'audio/wav');
+  res.setHeader('Content-Length', String(stat.size));
+  res.setHeader('Content-Disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const stream = createReadStream(path, { autoClose: true, fd });
+  stream.on('error', () => res.destroy());
   stream.pipe(res);
 }
 

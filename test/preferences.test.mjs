@@ -14,15 +14,17 @@ import {
 import { kokoroEnvironmentReady, readerSystemHealth } from '../dist/system-health.js';
 
 test('reader preferences persist shared voice, mode, rate, and shortcut', () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-preferences-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-preferences-'));
   try {
     saveReaderPreferences(home, {
+      engine: 'pocket',
       mode: 'smooth',
       rate: 1.25,
       shortcut: 'option+space',
       voice: 'bm_daniel',
     });
     assert.deepEqual(loadReaderPreferences(home), {
+      engine: 'pocket',
       mode: 'smooth',
       rate: 1.25,
       shortcut: 'option+space',
@@ -40,19 +42,20 @@ test('global shortcut choices reject unsupported combinations', () => {
 });
 
 test('system health recognizes a complete local Kokoro environment', () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-health-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-health-'));
   try {
-    const venv = join(home, 'Library', 'Application Support', 'Kokoro Reader', 'kokoro-venv');
+    const venv = join(home, 'Library', 'Application Support', 'Aloud', 'kokoro-venv');
     mkdirSync(join(venv, 'bin'), { recursive: true });
     mkdirSync(join(venv, 'lib', 'python3.12', 'site-packages', 'kokoro'), { recursive: true });
-    mkdirSync(join(home, 'Library', 'Services', 'Read Aloud with Kokoro.workflow'), { recursive: true });
-    mkdirSync(join(home, 'Library', 'Services', 'Stop Kokoro Reader.workflow'), { recursive: true });
+    mkdirSync(join(venv, 'lib', 'python3.12', 'site-packages', 'pocket_tts'), { recursive: true });
+    mkdirSync(join(home, 'Library', 'Services', 'Read Selection Aloud.workflow'), { recursive: true });
+    mkdirSync(join(home, 'Library', 'Services', 'Stop Aloud.workflow'), { recursive: true });
     mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
-    mkdirSync(join(home, 'Library', 'Application Support', 'Kokoro Reader', 'menubar'), { recursive: true });
-    writeFileSync(join(home, 'Library', 'Application Support', 'Kokoro Reader', 'menubar', 'KokoroReaderMenuBar'), 'binary');
-    writeFileSync(join(home, 'Library', 'LaunchAgents', 'local.kokoro-reader.menubar.plist'), 'plist');
+    mkdirSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar'), { recursive: true });
+    writeFileSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar'), 'binary');
+    writeFileSync(join(home, 'Library', 'LaunchAgents', 'local.aloud.menubar.plist'), 'plist');
     writeFileSync(join(venv, 'bin', 'python'), 'python');
-    chmodSync(join(home, 'Library', 'Application Support', 'Kokoro Reader', 'menubar', 'KokoroReaderMenuBar'), 0o755);
+    chmodSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar'), 0o755);
     chmodSync(join(venv, 'bin', 'python'), 0o755);
     assert.equal(kokoroEnvironmentReady(home), false, 'a partial venv without the setup manifest must not report ready');
 
@@ -69,7 +72,7 @@ test('system health recognizes a complete local Kokoro environment', () => {
       'voices/bf_emma.pt',
       'voices/bm_daniel.pt',
     ];
-    const appSupport = join(home, 'Library', 'Application Support', 'Kokoro Reader');
+    const appSupport = join(home, 'Library', 'Application Support', 'Aloud');
     const modelSnapshot = join(appSupport, 'huggingface', 'hub', 'models--hexgrad--Kokoro-82M', 'snapshots', modelRevision);
     for (const relativePath of requiredModelFiles) {
       const path = join(modelSnapshot, relativePath);
@@ -77,11 +80,14 @@ test('system health recognizes a complete local Kokoro environment', () => {
       writeFileSync(path, 'model');
     }
     const requirementsLock = readFileSync(new URL('../requirements-kokoro-py312.lock.txt', import.meta.url));
+    const pocketRequirementsLock = readFileSync(new URL('../requirements-pocket-py312.lock.txt', import.meta.url));
     writeFileSync(join(appSupport, 'setup-manifest.json'), JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       status: 'complete',
       pythonVersion: '3.12',
       requirementsLockSha256: createHash('sha256').update(requirementsLock).digest('hex'),
+      pocketRequirementsLockSha256: createHash('sha256').update(pocketRequirementsLock).digest('hex'),
+      pocketTtsVersion: '2.1.0',
       modelRepository: 'hexgrad/Kokoro-82M',
       modelRevision,
       requiredModelFiles,
@@ -92,12 +98,16 @@ test('system health recognizes a complete local Kokoro environment', () => {
     writeFileSync(modelRef, 'wrong-revision\n');
     assert.equal(kokoroEnvironmentReady(home), false, 'a stale offline model ref must not report ready');
     writeFileSync(modelRef, `${modelRevision}\n`);
+    assert.equal(kokoroEnvironmentReady(home), false, 'a newline-corrupted model ref must not report ready');
+    writeFileSync(modelRef, modelRevision);
     assert.equal(kokoroEnvironmentReady(home), true);
     const health = readerSystemHealth({
       accessibilityTrusted: true,
       canGoNext: false,
       canGoPrevious: false,
       canReplay: false,
+      engine: 'kokoro',
+      engineLabel: 'Kokoro',
       mode: 'auto',
       modeLabel: 'Auto',
       ok: true,
@@ -106,8 +116,8 @@ test('system health recognizes a complete local Kokoro environment', () => {
       running: false,
       shortcut: 'option+r',
       shortcutLabel: 'Option + R',
-      service: 'kokoro-reader-speech-daemon',
-      protocolVersion: 1,
+      service: 'aloud-speech-daemon',
+      protocolVersion: 2,
       state: { status: 'done' },
       voice: 'af_heart',
       voiceLabel: 'Heart',

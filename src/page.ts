@@ -1,4 +1,5 @@
 import { kokoroVoiceOptions } from './kokoro-tts.js';
+import { pocketVoiceOptions } from './pocket-tts.js';
 import { GLOBAL_SHORTCUTS } from './preferences.js';
 
 // Keep this below the server's one-megabyte request ceiling even when the
@@ -16,10 +17,17 @@ function esc(value: string): string {
 }
 
 export function renderPage(): string {
-  const voices = kokoroVoiceOptions();
+  const kokoroVoices = kokoroVoiceOptions();
+  const pocketVoices = pocketVoiceOptions();
   const voiceOptions = [
-    '<option value="random" data-description="Choose a different voice for every reading.">Random voice</option>',
-    ...voices.map((voice) => `<option value="${esc(voice.id)}" data-description="${esc(voice.description)}">${esc(voice.label)}</option>`),
+    '<optgroup label="Kokoro voices" data-engine-options="kokoro">',
+    '<option value="random" data-description="Choose a different Kokoro voice for every reading.">Random voice</option>',
+    ...kokoroVoices.map((voice) => `<option value="${esc(voice.id)}" data-description="${esc(voice.description)}">${esc(voice.label)}</option>`),
+    '</optgroup>',
+    '<optgroup label="Pocket TTS voices" data-engine-options="pocket" hidden disabled>',
+    '<option value="random" data-description="Choose a different Pocket TTS voice for every reading.">Random voice</option>',
+    ...pocketVoices.map((voice) => `<option value="${esc(voice.id)}" data-description="${esc(voice.description)}">${esc(voice.label)}</option>`),
+    '</optgroup>',
   ].join('');
   const shortcutOptions = GLOBAL_SHORTCUTS
     .map((shortcut) => `<option value="${esc(shortcut.id)}">${esc(shortcut.label)}</option>`)
@@ -30,7 +38,7 @@ export function renderPage(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kokoro Reader</title>
+  <title>Aloud</title>
   <style>
     @font-face {
       font-family: "Kokoro Manrope";
@@ -652,6 +660,19 @@ export function renderPage(): string {
     .speed-button[aria-pressed="true"] { border-color: #5e9e94; color: var(--mint-bright); background: #213532; box-shadow: none; }
     .utility-button { min-height: 32px; border-radius: 8px; padding: 0 10px; font-size: 11px; }
     .utility-button:hover, .secondary-button:hover, .speed-button:hover, .icon-button:hover, .stop-button:hover { border-color: #55706c; color: var(--ink); background: #202625; transform: none; }
+    .export-box {
+      margin-top: 18px;
+      border-top: 1px solid var(--edge);
+      padding-top: 16px;
+    }
+    .export-actions { display: flex; gap: 7px; }
+    .export-button { flex: 1; }
+    .export-download { display: inline-grid; place-items: center; text-decoration: none; }
+    .export-download[hidden], .export-cancel[hidden], .export-progress[hidden] { display: none; }
+    .export-status { min-height: 16px; margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .export-status.is-error { color: var(--danger); }
+    .export-progress { height: 3px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: #29302f; }
+    .export-progress-bar { width: 0; height: 100%; border-radius: inherit; background: var(--mint); }
 
     details summary {
       min-height: 52px;
@@ -723,7 +744,7 @@ export function renderPage(): string {
     .status-line { margin-bottom: 7px; color: var(--muted); font-size: 11px; }
     .status-message { overflow: hidden; color: #d6dcda; white-space: nowrap; text-overflow: ellipsis; }
     .status-message.is-changing { animation: status-shift 220ms var(--ease-ui) both; }
-    .status-message.error { color: #efaaaa; }
+    .status-message.is-error { color: #efaaaa; }
     .progress-track { height: 4px; background: #29302f; }
     .progress-bar { background: var(--mint); transition: none; }
     .player-shell.is-running .progress-bar { transition: width 420ms var(--ease-ui); }
@@ -784,7 +805,7 @@ export function renderPage(): string {
       .connection [data-connection-label] { display: inline; }
       textarea { min-height: 48vh; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
       .reading-view { height: 48vh; min-height: 0; padding: 28px 23px 80px; font-size: 18px; line-height: 1.7; }
-      .control-rail { grid-template-columns: 1fr; padding-bottom: 132px; }
+      .control-rail { grid-template-columns: 1fr; padding-bottom: 164px; }
       .control-card { grid-row: auto; }
       .player-shell {
         position: fixed;
@@ -800,6 +821,15 @@ export function renderPage(): string {
       .transport-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
       .primary-button { width: 100%; }
       .transport-status { grid-column: 1; grid-row: 2; }
+      .status-message.is-error {
+        display: -webkit-box;
+        overflow: hidden;
+        white-space: normal;
+        line-height: 1.35;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+      .status-message.is-error + [data-progress-label] { display: none; }
       .chunk-actions { grid-column: 2; grid-row: 2; justify-content: flex-end; }
       .key-hint { display: none; }
     }
@@ -811,7 +841,7 @@ export function renderPage(): string {
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">K</span>
         <div>
-          <h1>Kokoro Reader</h1>
+          <h1>Aloud</h1>
           <p class="sub">A private listening desk on your Mac.</p>
         </div>
       </div>
@@ -852,6 +882,14 @@ export function renderPage(): string {
             <h2>Voice &amp; pacing</h2>
           </div>
           <div class="field">
+            <label class="field-label" for="engine">Voice model</label>
+            <select id="engine" data-engine>
+              <option value="kokoro">Kokoro</option>
+              <option value="pocket">Pocket TTS</option>
+            </select>
+            <p class="field-note" data-engine-description>Kokoro provides polished, consistent document narration.</p>
+          </div>
+          <div class="field">
             <label class="field-label" for="voice">Voice</label>
             <div class="select-wrap">
               <select id="voice" data-voice>${voiceOptions}</select>
@@ -877,6 +915,16 @@ export function renderPage(): string {
             </div>
             <p class="field-note">Updates an active reading immediately.</p>
           </div>
+          <div class="export-box">
+            <span class="field-label">Voice file</span>
+            <div class="export-actions">
+              <button class="secondary-button export-button" type="button" data-export>Save voice file</button>
+              <button class="utility-button export-cancel" type="button" data-export-cancel hidden>Cancel</button>
+              <a class="utility-button export-download" data-export-download href="#" download hidden>Download again</a>
+            </div>
+            <p class="export-status" data-export-status role="status" aria-live="polite">Generates long recordings in parts, then joins them into one WAV.</p>
+            <div class="export-progress" data-export-progress-track role="progressbar" aria-label="Voice file generation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div class="export-progress-bar" data-export-progress></div></div>
+          </div>
         </section>
 
         <details data-setup>
@@ -886,8 +934,8 @@ export function renderPage(): string {
           </summary>
           <div class="details-body">
             <div class="health-grid" data-health-grid>
-              <div class="health-item" data-health="kokoro"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Kokoro</span><span class="health-detail">Checking local environment…</span></div><button class="repair-button" type="button" data-repair="kokoro" aria-label="Set up Kokoro">Set up</button></div>
-              <div class="health-item" data-health="daemon"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Shared reader</span><span class="health-detail">Checking daemon…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Restart Kokoro Reader services">Restart</button></div>
+              <div class="health-item" data-health="kokoro"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Voice models</span><span class="health-detail">Checking Kokoro and Pocket TTS…</span></div><button class="repair-button" type="button" data-repair="kokoro" aria-label="Set up voice models">Set up</button></div>
+              <div class="health-item" data-health="daemon"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Shared reader</span><span class="health-detail">Checking daemon…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Restart Aloud services">Restart</button></div>
               <div class="health-item" data-health="services"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Services</span><span class="health-detail">Checking macOS Services…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Install macOS Services">Install</button></div>
               <div class="health-item" data-health="menuBar"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Menu bar</span><span class="health-detail">Checking helper…</span></div><button class="repair-button" type="button" data-repair="services" aria-label="Install menu bar helper">Install</button></div>
               <div class="health-item" data-health="accessibility"><span class="health-dot" aria-hidden="true"></span><div><span class="health-name">Accessibility</span><span class="health-detail">Checking selection access…</span></div><button class="repair-button" type="button" data-repair="accessibility" aria-label="Open Accessibility settings">Open settings</button></div>
@@ -953,6 +1001,7 @@ export function renderPage(): string {
     var play = document.querySelector('[data-play]');
     var playLabel = document.querySelector('[data-play-label]');
     var stop = document.querySelector('[data-stop]');
+    var engine = document.querySelector('[data-engine]');
     var voice = document.querySelector('[data-voice]');
     var mode = document.querySelector('[data-mode]');
     var shortcut = document.querySelector('[data-shortcut]');
@@ -978,6 +1027,12 @@ export function renderPage(): string {
     var cacheRow = document.querySelector('[data-cache-row]');
     var cacheDetail = document.querySelector('[data-cache-detail]');
     var clearCacheButton = document.querySelector('[data-clear-cache]');
+    var exportButton = document.querySelector('[data-export]');
+    var exportCancelButton = document.querySelector('[data-export-cancel]');
+    var exportDownload = document.querySelector('[data-export-download]');
+    var exportStatus = document.querySelector('[data-export-status]');
+    var exportProgress = document.querySelector('[data-export-progress]');
+    var exportProgressTrack = document.querySelector('[data-export-progress-track]');
     var currentStatus = null;
     var requestBusy = false;
     var readerReachable = false;
@@ -1000,15 +1055,26 @@ export function renderPage(): string {
     var localStatusUntil = 0;
     var playbackEndedAt = 0;
     var storageWarningShown = false;
+    var currentExportId = null;
+    var exportTimer = null;
+    var exportRunning = false;
+    var exportAutoDownloadId = null;
     var MAX_TEXT_CHARACTERS = ${MAX_READER_TEXT_CHARACTERS};
     var MAX_FILE_BYTES = ${MAX_READER_FILE_BYTES};
     var STATUS_ACTIVE_POLL_MS = 750;
     var STATUS_IDLE_POLL_MS = 5000;
     var HEALTH_READY_POLL_MS = 60000;
     var HEALTH_RETRY_POLL_MS = 30000;
-    var TEXT_KEY = 'kokoro-reader-text';
-    var HISTORY_KEY = 'kokoro-reader-history';
-    var HISTORY_ENABLED_KEY = 'kokoro-reader-history-enabled';
+    var TEXT_KEY = 'aloud-text';
+    var HISTORY_KEY = 'aloud-history';
+    var HISTORY_ENABLED_KEY = 'aloud-history-enabled';
+    var EXPORT_KEY = 'aloud-current-export';
+    var LEGACY_STORAGE_KEYS = {
+      'kokoro-reader-text': TEXT_KEY,
+      'kokoro-reader-history': HISTORY_KEY,
+      'kokoro-reader-history-enabled': HISTORY_ENABLED_KEY,
+      'kokoro-reader-current-export': EXPORT_KEY
+    };
 
     function warnStorageUnavailable(){
       if(storageWarningShown) return;
@@ -1046,6 +1112,16 @@ export function renderPage(): string {
       }
     }
 
+    function migrateLegacyStorage(){
+      Object.keys(LEGACY_STORAGE_KEYS).forEach(function(oldKey){
+        var newKey = LEGACY_STORAGE_KEYS[oldKey];
+        if(readStorage(newKey, null) !== null) return;
+        var value = readStorage(oldKey, null);
+        if(value === null) return;
+        if(writeStorage(newKey, value)) removeStorage(oldKey);
+      });
+    }
+
     function requestJson(path, options){
       var config = options || {};
       if(config.body && typeof config.body !== 'string'){
@@ -1056,7 +1132,7 @@ export function renderPage(): string {
       }
       return fetch(path, config).then(function(response){
         return response.json().catch(function(){ return {}; }).then(function(body){
-          if(!response.ok) throw new Error(body.error || 'Kokoro Reader request failed.');
+          if(!response.ok) throw new Error(body.error || 'Aloud request failed.');
           return body;
         });
       });
@@ -1113,7 +1189,7 @@ export function renderPage(): string {
 
     function validateTextLength(value){
       if(String(value || '').length <= MAX_TEXT_CHARACTERS) return true;
-      setLocalStatus('That text is too long. Kokoro Reader accepts up to ' + MAX_TEXT_CHARACTERS.toLocaleString() + ' characters.', true, 6000);
+      setLocalStatus('That text is too long. Aloud accepts up to ' + MAX_TEXT_CHARACTERS.toLocaleString() + ' characters.', true, 6000);
       return false;
     }
 
@@ -1259,6 +1335,7 @@ export function renderPage(): string {
       play.disabled = requestBusy || !readerReachable || (!running && (!hasText || textTooLong));
       stop.disabled = requestBusy || !readerReachable || !running;
       preview.disabled = requestBusy || running || !readerReachable;
+      engine.disabled = requestBusy || running || !readerReachable;
       voice.disabled = requestBusy || running || !readerReachable;
       mode.disabled = requestBusy || running || !readerReachable;
       shortcut.disabled = requestBusy || !readerReachable;
@@ -1269,6 +1346,8 @@ export function renderPage(): string {
       document.querySelectorAll('[data-repair]').forEach(function(button){ button.disabled = requestBusy || running || healthRepairRunning; });
       healthRetryButton.disabled = requestBusy || running;
       clearCacheButton.disabled = replacingLocked || !cacheAvailable || cacheEntries <= 0;
+      exportButton.disabled = exportRunning || requestBusy || !hasText || textTooLong;
+      exportCancelButton.disabled = !exportRunning;
 
       var next = currentStatus || {};
       document.querySelector('[data-seek="previous"]').disabled = requestBusy || !readerReachable || !next.canGoPrevious;
@@ -1283,6 +1362,34 @@ export function renderPage(): string {
 
     function updateVoiceDescription(){
       document.querySelector('[data-voice-description]').textContent = selectedDescription(voice);
+    }
+
+    function updateEngineDescription(){
+      document.querySelector('[data-engine-description]').textContent = engine.value === 'pocket'
+        ? 'Pocket TTS starts quickly and offers a larger English voice catalog.'
+        : 'Kokoro provides polished, consistent document narration.';
+      if(!currentExportId && !exportRunning){
+        exportStatus.textContent = engine.value === 'pocket'
+          ? 'Pocket exports use the voice model’s natural 1× speed. Live reading still follows your selected speed.'
+          : 'Generates long recordings in parts, then joins them into one WAV.';
+      }
+    }
+
+    function syncEngineVoices(engineValue, preferredVoice){
+      var activeGroup = null;
+      document.querySelectorAll('[data-engine-options]').forEach(function(group){
+        var active = group.getAttribute('data-engine-options') === engineValue;
+        group.hidden = !active;
+        group.disabled = !active;
+        if(active) activeGroup = group;
+      });
+      var preferred = preferredVoice && activeGroup
+        ? Array.from(activeGroup.querySelectorAll('option')).find(function(option){ return option.value === String(preferredVoice); })
+        : null;
+      var next = preferred || (activeGroup && activeGroup.querySelector('option'));
+      if(next) voice.value = next.value;
+      updateEngineDescription();
+      updateVoiceDescription();
     }
 
     function updateModeDescription(){
@@ -1304,7 +1411,8 @@ export function renderPage(): string {
       playerShell.classList.toggle('is-running', !!next.running);
       connectionLabel.textContent = next.running ? (next.paused ? 'Paused' : 'Reading') : 'Local · Ready';
       connection.setAttribute('aria-label', 'Reader status: ' + connectionLabel.textContent);
-      if(document.activeElement !== voice) voice.value = next.voice || 'af_heart';
+      if(document.activeElement !== engine) engine.value = next.engine || 'kokoro';
+      if(document.activeElement !== voice && document.activeElement !== engine) syncEngineVoices(engine.value, next.voice);
       if(document.activeElement !== mode) mode.value = next.mode || 'auto';
       if(document.activeElement !== shortcut) shortcut.value = next.shortcut || 'option+r';
       updateVoiceDescription();
@@ -1390,7 +1498,7 @@ export function renderPage(): string {
         if(next && next.ok && typeof next.running === 'boolean') renderStatus(next);
         return next;
       }).catch(function(error){
-        setLocalStatus(error.message || 'Kokoro Reader request failed.', true, 6000);
+        setLocalStatus(error.message || 'Aloud request failed.', true, 6000);
       }).finally(function(){
         requestBusy = false;
         updateCounts();
@@ -1427,6 +1535,7 @@ export function renderPage(): string {
       return withBusy(function(){
         setStatus('Preparing text…');
         return post('/api/reader/speak', {
+          engine: engine.value,
           mode: mode.value,
           rate: selectedRate(),
           text: value,
@@ -1443,15 +1552,116 @@ export function renderPage(): string {
       return selected ? Number(selected.getAttribute('data-rate')) : 1;
     }
 
+    function renderExport(next){
+      if(!next) return;
+      currentExportId = next.id || currentExportId;
+      exportRunning = next.state === 'queued' || next.state === 'generating';
+      var percent = Math.max(0, Math.min(100, Number(next.progress || 0)));
+      exportProgress.style.width = String(percent) + '%';
+      exportProgressTrack.setAttribute('aria-valuenow', String(percent));
+      exportProgressTrack.hidden = !exportRunning && next.state !== 'ready';
+      exportCancelButton.hidden = !exportRunning;
+      exportDownload.hidden = next.state !== 'ready' || !next.downloadUrl;
+      exportStatus.classList.toggle('is-error', next.state === 'error');
+      exportStatus.textContent = next.message || 'Preparing voice file…';
+      exportButton.textContent = exportRunning ? 'Generating voice file…' : 'Save voice file';
+      if(next.state === 'ready' && next.downloadUrl){
+        exportDownload.href = next.downloadUrl;
+        exportDownload.setAttribute('download', next.filename || 'kokoro-reading.wav');
+        if(exportAutoDownloadId === next.id){
+          exportAutoDownloadId = null;
+          exportDownload.click();
+        }
+      }
+      if(!exportRunning && exportTimer){ clearTimeout(exportTimer); exportTimer = null; }
+      syncInteractionState();
+    }
+
+    function scheduleExportPoll(delay){
+      if(exportTimer) clearTimeout(exportTimer);
+      if(!currentExportId || !exportRunning || document.hidden) return;
+      exportTimer = setTimeout(refreshExport, delay || 900);
+    }
+
+    function refreshExport(){
+      if(!currentExportId) return Promise.resolve();
+      return requestJson('/api/exports/' + encodeURIComponent(currentExportId)).then(function(next){
+        renderExport(next);
+        if(exportRunning) scheduleExportPoll(900);
+        return next;
+      }).catch(function(error){
+        if(exportTimer) clearTimeout(exportTimer);
+        exportTimer = null;
+        exportRunning = false;
+        currentExportId = null;
+        removeStorage(EXPORT_KEY);
+        exportStatus.classList.add('is-error');
+        exportStatus.textContent = error.message || 'Could not check the voice export.';
+        syncInteractionState();
+      });
+    }
+
+    function startVoiceExport(){
+      var value = text.value || '';
+      if(!value.trim()){ setLocalStatus('Paste or type some text first.', true); return; }
+      if(!validateTextLength(value)) return;
+      exportRunning = true;
+      exportDownload.hidden = true;
+      exportCancelButton.hidden = false;
+      exportProgressTrack.hidden = false;
+      exportProgress.style.width = '0%';
+      exportStatus.classList.remove('is-error');
+      exportStatus.textContent = 'Preparing voice file export…';
+      exportButton.textContent = 'Generating voice file…';
+      syncInteractionState();
+      saveRecent(value);
+      return post('/api/exports', {
+        engine: engine.value,
+        rate: selectedRate(),
+        text: value,
+        voice: voice.value
+      }).then(function(next){
+        currentExportId = next.id;
+        exportAutoDownloadId = next.id;
+        writeStorage(EXPORT_KEY, next.id);
+        renderExport(next);
+        scheduleExportPoll(250);
+      }).catch(function(error){
+        exportRunning = false;
+        exportCancelButton.hidden = true;
+        exportProgressTrack.hidden = true;
+        exportButton.textContent = 'Save voice file';
+        exportStatus.classList.add('is-error');
+        exportStatus.textContent = error.message || 'Could not start the voice export.';
+        syncInteractionState();
+      });
+    }
+
+    function cancelVoiceExport(){
+      if(!currentExportId || !exportRunning) return;
+      exportCancelButton.disabled = true;
+      return post('/api/exports/' + encodeURIComponent(currentExportId) + '/cancel', {}).then(function(next){
+        exportAutoDownloadId = null;
+        removeStorage(EXPORT_KEY);
+        renderExport(next);
+      }).catch(function(error){
+        exportStatus.classList.add('is-error');
+        exportStatus.textContent = error.message || 'Could not cancel the voice export.';
+        exportCancelButton.disabled = false;
+      });
+    }
+
     function previewVoice(){
       var option = voice.options[voice.selectedIndex];
-      var label = option ? option.textContent : 'Kokoro';
+      var label = option ? option.textContent : 'the selected voice';
+      var engineLabel = engine.value === 'pocket' ? 'Pocket TTS' : 'Kokoro';
       return withBusy(function(){
         setStatus('Preparing voice preview…');
         return post('/api/reader/speak', {
+          engine: engine.value,
           mode: 'smooth',
           rate: selectedRate(),
-          text: label + ' is ready to read with Kokoro.',
+          text: label + ' is ready to read with ' + engineLabel + '.',
           voice: voice.value
         });
       });
@@ -1626,6 +1836,8 @@ export function renderPage(): string {
       if(target.closest('[data-play]')){ playOrPause(); return; }
       if(target.closest('[data-stop]')){ withBusy(function(){ return post('/api/reader/control', { action: 'stop' }); }); return; }
       if(target.closest('[data-preview]')){ previewVoice(); return; }
+      if(target.closest('[data-export-cancel]')){ cancelVoiceExport(); return; }
+      if(target.closest('[data-export]')){ startVoiceExport(); return; }
       if(target.closest('[data-retry-reader]')){
         connection.classList.remove('is-error', 'is-ready', 'is-busy');
         connection.classList.add('is-connecting');
@@ -1712,7 +1924,11 @@ export function renderPage(): string {
       }
     });
 
-    voice.addEventListener('change', function(){ updateVoiceDescription(); updateSettings({ voice: voice.value }); });
+    engine.addEventListener('change', function(){
+      syncEngineVoices(engine.value);
+      updateSettings({ engine: engine.value, voice: voice.value });
+    });
+    voice.addEventListener('change', function(){ updateVoiceDescription(); updateSettings({ engine: engine.value, voice: voice.value }); });
     mode.addEventListener('change', function(){ updateModeDescription(); updateSettings({ mode: mode.value }); });
     shortcut.addEventListener('change', function(){ updateSettings({ shortcut: shortcut.value }); });
     historyEnabled.addEventListener('change', function(){ writeStorage(HISTORY_ENABLED_KEY, historyEnabled.checked ? 'true' : 'false'); renderHistory(); });
@@ -1755,14 +1971,23 @@ export function renderPage(): string {
       }
     });
 
+    migrateLegacyStorage();
     text.value = readStorage(TEXT_KEY, '');
     historyEnabled.checked = readStorage(HISTORY_ENABLED_KEY, 'false') === 'true';
     resetClearUndo();
     updateCounts();
     if((text.value || '').length > MAX_TEXT_CHARACTERS) validateTextLength(text.value);
-    updateVoiceDescription();
+    syncEngineVoices(engine.value || 'kokoro', voice.value || 'af_heart');
     updateModeDescription();
     renderHistory();
+    currentExportId = readStorage(EXPORT_KEY, '') || null;
+    if(currentExportId){
+      exportRunning = true;
+      exportCancelButton.hidden = false;
+      exportProgressTrack.hidden = false;
+      exportStatus.textContent = 'Reconnecting to voice file export…';
+      refreshExport();
+    }
     runStatusPoll();
     runHealthPoll();
     refreshCache();
@@ -1777,6 +2002,7 @@ export function renderPage(): string {
       runStatusPoll();
       runHealthPoll();
       refreshCache();
+      if(currentExportId && exportRunning) refreshExport();
     });
     window.addEventListener('beforeunload', function(){ clearTimeout(statusTimer); clearTimeout(healthTimer); if(clearUndoTimer) clearTimeout(clearUndoTimer); });
   })();

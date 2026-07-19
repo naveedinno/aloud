@@ -1,18 +1,22 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import {
-  createKokoroSynthesizerSession,
   kokoroRate,
   kokoroWorkerCount,
-  synthesizeWithKokoro,
-  type KokoroTtsCacheEntry,
-  type KokoroTtsRequest,
 } from './kokoro-tts.js';
+import {
+  createManagedSpeechSynthesizer,
+  type SpeechEngine,
+  type SpeechSynthesisResult,
+  type SpeechSynthesizer,
+} from './speech-engine.js';
 
 export interface SpeakArgs {
   batch: boolean;
   controller: boolean;
   daemon: boolean;
+  engine: SpeechEngine;
+  engineExplicit: boolean;
   help: boolean;
   mode: SpeechMode;
   modeExplicit: boolean;
@@ -27,8 +31,7 @@ export interface SpeakArgs {
   workers: number;
 }
 
-export type SpeechResult = KokoroTtsCacheEntry & { cached: boolean; url: string };
-export type SpeechSynthesizer = (home: string, input: KokoroTtsRequest, opts?: { signal?: AbortSignal }) => Promise<SpeechResult>;
+export type SpeechResult = SpeechSynthesisResult;
 export interface SpeechPlaybackHandle {
   readonly paused: boolean;
   pause: () => void;
@@ -63,6 +66,7 @@ export interface SpeechChunkRange {
 export interface SpeakTextOptions {
   batch?: boolean;
   batches?: string[];
+  engine?: SpeechEngine;
   home?: string;
   mode?: SpeechMode;
   prefetch?: number;
@@ -85,6 +89,8 @@ export function parseSpeakArgs(argv: string[]): SpeakArgs {
     batch: true,
     controller: false,
     daemon: false,
+    engine: 'kokoro',
+    engineExplicit: false,
     help: false,
     mode: 'fast-start',
     modeExplicit: false,
@@ -121,6 +127,12 @@ export function parseSpeakArgs(argv: string[]): SpeakArgs {
     else if (token === '--open') parsed.noOpen = false;
     else if (token === '--controller' || token === '--popup') parsed.controller = true;
     else if (token === '--daemon') parsed.daemon = true;
+    else if (token === '--engine') {
+      parsed.engine = String(args[++i] ?? '').toLowerCase() === 'pocket' ? 'pocket' : 'kokoro';
+      parsed.engineExplicit = true;
+    }
+    else if (token === '--pocket') { parsed.engine = 'pocket'; parsed.engineExplicit = true; }
+    else if (token === '--kokoro') { parsed.engine = 'kokoro'; parsed.engineExplicit = true; }
     else if (token === '--prefetch') parsed.prefetch = prefetchWindow(Number(args[++i]));
     else if (token === '--workers') parsed.workers = kokoroWorkerCount(Number(args[++i]));
     else if (token === '--voice') {
@@ -151,10 +163,8 @@ export async function speakText(options: SpeakTextOptions): Promise<SpeechResult
   if (!text) throw new Error('No text to speak.');
 
   const home = options.home ?? homedir();
-  const session = options.synthesize || options.batch === false
-    ? undefined
-    : createKokoroSynthesizerSession(home, { workers: options.workers });
-  const synthesize = options.synthesize ?? (session ? ((_: string, input: KokoroTtsRequest, opts?: { signal?: AbortSignal }) => session.synthesize(input, opts)) : synthesizeWithKokoro);
+  const session = options.synthesize ? undefined : createManagedSpeechSynthesizer(home);
+  const synthesize = options.synthesize ?? session!.synthesize;
   const player = options.player ?? playAudio;
   try {
     if (options.batch === false) {
@@ -269,6 +279,7 @@ async function speakTextInBatches(options: Required<Pick<SpeakTextOptions, 'text
   });
 
   const synthesizeBatch = (text: string) => options.synthesize(home, {
+    ...(options.engine ? { engine: options.engine } : {}),
     text,
     voice: options.voice,
     rate: speechRate(options.rate),
@@ -338,6 +349,7 @@ async function speakFullText(options: Required<Pick<SpeakTextOptions, 'text' | '
   });
 
   const result = await options.synthesize(options.home, {
+    ...(options.engine ? { engine: options.engine } : {}),
     text: options.text,
     voice: options.voice,
     rate: speechRate(options.rate),

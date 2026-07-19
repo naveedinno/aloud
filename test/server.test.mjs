@@ -11,7 +11,7 @@ test('reader page renders the core app controls', async () => {
   handle(req, res);
   await res.done;
   assert.equal(res.statusCode, 200);
-  assert.match(res.body, /Kokoro Reader/);
+  assert.match(res.body, /Aloud/);
   assert.match(res.body, /data-reader-app/);
   assert.match(res.body, /data-listening-desk/);
   assert.match(res.body, /class="document-panel"/);
@@ -24,6 +24,8 @@ test('reader page renders the core app controls', async () => {
   assert.match(res.body, /\/assets\/fonts\/AtkinsonHyperlegibleNext-Variable\.ttf/);
   assert.doesNotMatch(res.body, /Iowan Old Style/);
   assert.match(res.body, /data-play/);
+  assert.match(res.body, /data-export/);
+  assert.match(res.body, /Save voice file/);
   assert.match(res.body, /option value="af_heart"/);
   assert.match(res.body, /option value="bm_daniel"/);
   assert.match(res.body, /\/api\/reader\/status/);
@@ -49,7 +51,7 @@ test('reader page renders the core app controls', async () => {
   assert.doesNotMatch(res.body, /data-highlight-toggle/);
   assert.doesNotMatch(res.body, /data-highlight-panel/);
   assert.doesNotMatch(res.body, /reader-word/);
-  assert.doesNotMatch(res.body, /kokoro-reader-highlight/);
+  assert.doesNotMatch(res.body, /aloud-highlight/);
   assert.doesNotMatch(res.body, /class="config-bar"/);
   assert.doesNotMatch(res.body, /class="reader-card"/);
 });
@@ -100,7 +102,7 @@ test('reader requires JSON and its HttpOnly local session for mutations', async 
   const page = mockRequest('GET', '/', '');
   handle(page.req, page.res, undefined, reader, undefined, options);
   await page.res.done;
-  assert.match(page.res.headers['set-cookie'], /kokoro_reader_session=test-session/);
+  assert.match(page.res.headers['set-cookie'], /aloud_session=test-session/);
   assert.match(page.res.headers['set-cookie'], /HttpOnly/);
   assert.match(page.res.headers['set-cookie'], /SameSite=Strict/);
 
@@ -111,14 +113,14 @@ test('reader requires JSON and its HttpOnly local session for mutations', async 
 
   const wrongType = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }), {
     'content-type': 'text/plain',
-    cookie: 'kokoro_reader_session=test-session',
+    cookie: 'aloud_session=test-session',
   });
   handle(wrongType.req, wrongType.res, undefined, reader, undefined, options);
   await wrongType.res.done;
   assert.equal(wrongType.res.statusCode, 415);
 
   const allowed = mockRequest('POST', '/api/reader/control', JSON.stringify({ action: 'stop' }), {
-    cookie: 'kokoro_reader_session=test-session',
+    cookie: 'aloud_session=test-session',
     origin: 'http://localhost:7878',
     'sec-fetch-site': 'same-origin',
   });
@@ -137,7 +139,7 @@ test('reader returns a JSON 413 for a byte-counted oversized body', async () => 
 });
 
 test('reader reports and clears old cache entries while preserving the cache contract', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-server-cache-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-server-cache-'));
   try {
     const dir = kokoroTtsCacheDir(home);
     mkdirSync(dir, { recursive: true });
@@ -265,9 +267,9 @@ test('kokoro api returns generated audio metadata', async () => {
   const { req, res } = mockRequest('POST', '/api/tts/kokoro', JSON.stringify({ text: 'hello', voice: 'af_heart', rate: 1 }));
   handle(req, res, async (home, input) => ({
     cached: true,
-    dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+    dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
     id: 'a'.repeat(64),
-    path: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro', `${'a'.repeat(64)}.wav`),
+    path: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro', `${'a'.repeat(64)}.wav`),
     voice: input.voice,
     langCode: 'a',
     rate: input.rate,
@@ -282,6 +284,46 @@ test('kokoro api returns generated audio metadata', async () => {
     url: `/api/tts/kokoro/${'a'.repeat(64)}.wav`,
     voice: 'af_heart',
   });
+});
+
+test('voice export API starts, reports, and cancels a background WAV job', async () => {
+  const calls = { cancel: [], start: [] };
+  const status = {
+    current: 0,
+    filename: 'Chapter.wav',
+    id: '12345678-1234-1234-1234-123456789abc',
+    message: 'Generating part 1 of 3…',
+    progress: 0,
+    rate: 1,
+    state: 'generating',
+    total: 3,
+    voice: 'af_heart',
+  };
+  const exports = {
+    cancel(id) { calls.cancel.push(id); return { ...status, message: 'Voice file export cancelled.', state: 'cancelled' }; },
+    dispose() {},
+    file() { return undefined; },
+    get(id) { return id === status.id ? status : undefined; },
+    start(input) { calls.start.push(input); return status; },
+  };
+
+  const start = mockRequest('POST', '/api/exports', JSON.stringify({ text: 'A long chapter.', voice: 'af_heart', rate: 1 }));
+  handle(start.req, start.res, undefined, undefined, undefined, { exports });
+  await start.res.done;
+  assert.equal(start.res.statusCode, 200);
+  assert.deepEqual(calls.start, [{ text: 'A long chapter.', voice: 'af_heart', rate: 1 }]);
+  assert.equal(JSON.parse(start.res.body).id, status.id);
+
+  const poll = mockRequest('GET', `/api/exports/${status.id}`, '');
+  handle(poll.req, poll.res, undefined, undefined, undefined, { exports });
+  await poll.res.done;
+  assert.equal(JSON.parse(poll.res.body).state, 'generating');
+
+  const cancel = mockRequest('POST', `/api/exports/${status.id}/cancel`, '{}');
+  handle(cancel.req, cancel.res, undefined, undefined, undefined, { exports });
+  await cancel.res.done;
+  assert.equal(JSON.parse(cancel.res.body).state, 'cancelled');
+  assert.deepEqual(calls.cancel, [status.id]);
 });
 
 function mockRequest(method, url, body, headers = {}) {

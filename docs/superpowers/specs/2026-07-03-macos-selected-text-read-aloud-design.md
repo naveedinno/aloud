@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let the user select text anywhere on macOS, invoke a contextual Service or Quick Action, and hear the selection read aloud through the local Kokoro setup already used by Kokoro Reader.
+Let the user select text anywhere on macOS, invoke a contextual Service or Quick Action, and hear the selection read aloud through the local Kokoro setup already used by Aloud.
 
 ## Approach
 
@@ -10,9 +10,9 @@ Use the existing Kokoro synthesis module as the source of truth. Add a non-brows
 
 ## Scope
 
-- Add `kokoro-reader speak` support through `src/cli.ts`.
+- Add `aloud speak` support through `src/cli.ts`.
 - Add a reusable `speakText` function that can be tested without generating real speech or audio playback.
-- Add a `scripts/install-macos-service.sh` installer for a "Read Aloud with Kokoro" Quick Action.
+- Add a `scripts/install-macos-service.sh` installer for a "Read Selection Aloud" Quick Action.
 - Document installation and right-click usage in `README.md`.
 
 ## Behavior
@@ -34,4 +34,4 @@ Use the existing Kokoro synthesis module as the source of truth. Add a non-brows
 
 - Unit tests cover stdin argument parsing, empty text validation, and player invocation.
 - `npm test` must pass.
-- The installer must create `~/Library/Services/Read Aloud with Kokoro.workflow`.
+- The installer must create `~/Library/Services/Read Selection Aloud.workflow`.

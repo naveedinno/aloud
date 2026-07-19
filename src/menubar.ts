@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { kokoroReaderSupportDir } from './kokoro-tts.js';
+import { aloudSupportDir } from './kokoro-tts.js';
 
 const MENUBAR_SWIFT = String.raw`import AppKit
 import ApplicationServices
@@ -36,6 +36,8 @@ struct DaemonStatus: Decodable {
         let status: String?
     }
     let ok: Bool?
+    let engine: String?
+    let engineLabel: String?
     let protocolVersion: Int?
     let service: String?
     let mode: String?
@@ -72,9 +74,11 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private var accessibilityTimer: Timer?
     private var pollInFlight = false
     private var readerItems: [NSMenuItem] = []
+    private var engineItems: [NSMenuItem] = []
     private var selectionMenuItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
     private var speedItems: [NSMenuItem] = []
+    private var currentEngine = "kokoro"
     private var currentMode = "auto"
     private var currentModeLabel = "Auto"
     private var currentRate: Double = 1
@@ -119,7 +123,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let title = NSMenuItem(title: "Kokoro Reader", action: nil, keyEquivalent: "")
+        let title = NSMenuItem(title: "Aloud", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
 
@@ -145,8 +149,23 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         menu.addItem(clipboardItem)
         menu.addItem(.separator())
 
+        let engineMenu = NSMenu()
+        engineMenu.autoenablesItems = false
+        for (title, engine) in [("Kokoro", "kokoro"), ("Pocket TTS", "pocket")] {
+            let item = NSMenuItem(title: title, action: #selector(setEngine(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = engine
+            engineMenu.addItem(item)
+            engineItems.append(item)
+        }
+        let engineRoot = NSMenuItem(title: "Voice Model", action: nil, keyEquivalent: "")
+        engineRoot.submenu = engineMenu
+        menu.addItem(engineRoot)
+
         let readerMenu = NSMenu()
         readerMenu.autoenablesItems = false
+        let kokoroMenu = NSMenu()
+        kokoroMenu.autoenablesItems = false
         for (title, voice) in [
             ("Random", "random"),
             ("Heart", "af_heart"),
@@ -160,10 +179,36 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         ] {
             let item = NSMenuItem(title: title, action: #selector(setReader(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = voice
-            readerMenu.addItem(item)
+            item.representedObject = "kokoro|\(voice)"
+            kokoroMenu.addItem(item)
             readerItems.append(item)
         }
+        let kokoroRoot = NSMenuItem(title: "Kokoro", action: nil, keyEquivalent: "")
+        kokoroRoot.submenu = kokoroMenu
+        readerMenu.addItem(kokoroRoot)
+
+        let pocketMenu = NSMenu()
+        pocketMenu.autoenablesItems = false
+        for (title, voice) in [
+            ("Random", "random"), ("Alba", "alba"), ("Anna", "anna"),
+            ("Azelma", "azelma"), ("Bill Boerst", "bill_boerst"),
+            ("Caro Davy", "caro_davy"), ("Charles", "charles"),
+            ("Cosette", "cosette"), ("Éponine", "eponine"), ("Eve", "eve"),
+            ("Fantine", "fantine"), ("George", "george"), ("Jane", "jane"),
+            ("Javert", "javert"), ("Jean", "jean"), ("Marius", "marius"),
+            ("Mary", "mary"), ("Michael", "michael"), ("Paul", "paul"),
+            ("Peter Yearsley", "peter_yearsley"), ("Stuart Bell", "stuart_bell"),
+            ("Vera", "vera")
+        ] {
+            let item = NSMenuItem(title: title, action: #selector(setReader(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = "pocket|\(voice)"
+            pocketMenu.addItem(item)
+            readerItems.append(item)
+        }
+        let pocketRoot = NSMenuItem(title: "Pocket TTS", action: nil, keyEquivalent: "")
+        pocketRoot.submenu = pocketMenu
+        readerMenu.addItem(pocketRoot)
         let readerRoot = NSMenuItem(title: "Reader", action: nil, keyEquivalent: "")
         readerRoot.submenu = readerMenu
         menu.addItem(readerRoot)
@@ -224,7 +269,10 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         selectionMenuItem.title = "Read Selection (\(currentShortcutLabel))"
         setMenuBarIcon(state: visualState)
         for item in readerItems {
-            item.state = (item.representedObject as? String) == currentVoice ? .on : .off
+            item.state = (item.representedObject as? String) == "\(currentEngine)|\(currentVoice)" ? .on : .off
+        }
+        for item in engineItems {
+            item.state = (item.representedObject as? String) == currentEngine ? .on : .off
         }
         for item in modeItems {
             item.state = (item.representedObject as? String) == currentMode ? .on : .off
@@ -247,7 +295,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                   let status = try? JSONDecoder().decode(DaemonStatus.self, from: data),
                   status.ok == true,
                   status.protocolVersion == 1,
-                  status.service == "kokoro-reader-speech-daemon" else {
+                  status.service == "aloud-speech-daemon" else {
                 DispatchQueue.main.async {
                     self.pollInFlight = false
                     self.isRunning = false
@@ -274,6 +322,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                 }
                 self.currentMode = status.mode ?? self.currentMode
                 self.currentModeLabel = status.modeLabel ?? self.currentModeLabel
+                self.currentEngine = status.engine ?? self.currentEngine
                 self.currentVoice = status.voice ?? self.currentVoice
                 self.currentVoiceLabel = status.voiceLabel ?? self.currentVoiceLabel
                 self.isPaused = status.paused ?? false
@@ -371,7 +420,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     @objc private func readSelection() {
         guard accessibilityTrusted() else {
-            notify("Allow Kokoro Reader in Accessibility, then press Option+R again.")
+            notify("Allow Aloud in Accessibility, then press Option+R again.")
             return
         }
         let snapshot = captureClipboard()
@@ -413,7 +462,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                     self.isRunning = false
                     self.visualState = .idle
                     self.render()
-                    self.notify("Could not reach Kokoro Reader.")
+                    self.notify("Could not reach Aloud.")
                 } else {
                     self.pollStatus()
                 }
@@ -464,12 +513,29 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     }
 
     @objc private func setReader(_ sender: NSMenuItem) {
-        guard let voice = sender.representedObject as? String else { return }
+        guard let value = sender.representedObject as? String else { return }
+        let parts = value.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let engine = parts[0]
+        let voice = parts[1]
+        currentEngine = engine
         currentVoice = voice
         currentVoiceLabel = sender.title
         render()
-        let payload = "{\"voice\":\"\(voice)\"}".data(using: .utf8)
-        request(path: "voice", method: "POST", body: payload) { [weak self] _ in
+        let payload = "{\"engine\":\"\(engine)\",\"voice\":\"\(voice)\"}".data(using: .utf8)
+        request(path: "settings", method: "POST", body: payload) { [weak self] _ in
+            self?.pollStatus()
+        }
+    }
+
+    @objc private func setEngine(_ sender: NSMenuItem) {
+        guard let engine = sender.representedObject as? String else { return }
+        currentEngine = engine
+        currentVoice = engine == "pocket" ? "alba" : "af_heart"
+        currentVoiceLabel = engine == "pocket" ? "Alba" : "Heart"
+        render()
+        let payload = "{\"engine\":\"\(engine)\",\"voice\":\"\(currentVoice)\"}".data(using: .utf8)
+        request(path: "settings", method: "POST", body: payload) { [weak self] _ in
             self?.pollStatus()
         }
     }
@@ -530,6 +596,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     private func speakPayload(text: String) -> Data? {
         let payload: [String: Any] = [
+            "engine": currentEngine,
             "text": text,
             "mode": currentMode,
             "rate": currentRate,
@@ -540,7 +607,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     private func notify(_ message: String) {
         let notification = NSUserNotification()
-        notification.title = "Kokoro Reader"
+        notification.title = "Aloud"
         notification.informativeText = message
         NSUserNotificationCenter.default.deliver(notification)
     }
@@ -598,7 +665,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
         image.unlockFocus()
         image.isTemplate = state == .idle
-        image.accessibilityDescription = "Kokoro Reader"
+        image.accessibilityDescription = "Aloud"
         return image
     }
 
@@ -658,11 +725,11 @@ export function startNativeMenuBar(opts: { cliPath?: string; installerPath?: str
 }
 
 export function nativeMenuBarPaths(home = homedir()): { dir: string; executable: string; source: string } {
-  const dir = join(kokoroReaderSupportDir(home), 'menubar');
+  const dir = join(aloudSupportDir(home), 'menubar');
   return {
     dir,
-    executable: join(dir, 'KokoroReaderMenuBar'),
-    source: join(dir, 'KokoroReaderMenuBar.swift'),
+    executable: join(dir, 'AloudMenuBar'),
+    source: join(dir, 'AloudMenuBar.swift'),
   };
 }
 

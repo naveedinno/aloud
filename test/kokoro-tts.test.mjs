@@ -59,14 +59,14 @@ test('kokoro text normalization preserves paragraph breaks and trims noise', () 
 });
 
 test('kokoro cache path and URL are deterministic', () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-home-'));
   try {
     const a = kokoroTtsCachePath(home, { text: 'hello', voice: 'heart', rate: 1 });
     const b = kokoroTtsCachePath(home, { text: 'hello', voice: 'af_heart', rate: 1 });
     const c = kokoroTtsCachePath(home, { text: 'hello again', voice: 'af_heart', rate: 1 });
     assert.equal(a.id, b.id);
     assert.notEqual(a.id, c.id);
-    assert.ok(a.path.startsWith(join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro')));
+    assert.ok(a.path.startsWith(join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro')));
     assert.equal(kokoroTtsUrl(a.id), `/api/tts/kokoro/${a.id}.wav`);
     assert.equal(isKokoroTtsId(a.id), true);
     assert.equal(isKokoroTtsId('not-real'), false);
@@ -76,7 +76,7 @@ test('kokoro cache path and URL are deterministic', () => {
 });
 
 test('managed Kokoro synthesizer is lazy, reuses a warm session, and unloads it after idle', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-managed-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-managed-home-'));
   let created = 0;
   let disposed = 0;
   const manager = createManagedKokoroSynthesizer(home, {
@@ -115,7 +115,7 @@ test('managed Kokoro synthesizer is lazy, reuses a warm session, and unloads it 
 });
 
 test('Kokoro session deduplicates generation and atomically publishes private valid WAV files', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-session-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-session-home-'));
   const counter = join(home, 'worker-count.txt');
   const worker = fakeWorker(home, counter, 15);
   const session = createKokoroSynthesizerSession(home, { command: worker, timeoutMs: 5000 });
@@ -138,7 +138,7 @@ test('Kokoro session deduplicates generation and atomically publishes private va
 });
 
 test('Kokoro worker queue rejects overload with 429 and times out stuck work', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-queue-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-queue-home-'));
   const worker = fakeWorker(home, join(home, 'worker-count.txt'), 80);
   const session = createKokoroSynthesizerSession(home, {
     command: worker,
@@ -171,7 +171,7 @@ test('Kokoro worker queue rejects overload with 429 and times out stuck work', a
 });
 
 test('cache pruning removes invalid and abandoned temp files and clear removes recent audio', () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-prune-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-prune-home-'));
   try {
     const dir = kokoroTtsCacheDir(home);
     mkdirSync(dir, { recursive: true });

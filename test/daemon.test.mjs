@@ -26,11 +26,12 @@ test('speech daemon tracks menu bar voice selection for plain reads', () => {
   assert.match(source, /currentMode = speechMode\(body\.mode \?\? currentMode\)/);
   assert.match(source, /mode: currentMode/);
   assert.match(source, /modeLabel: speechModeLabel\(currentMode\)/);
-  assert.match(source, /let currentVoice = normalizeDaemonVoice\(storedPreferences\.voice/);
+  assert.match(source, /let currentEngine = normalizeSpeechEngine\(storedPreferences\.engine/);
+  assert.match(source, /let currentVoice = normalizeDaemonVoice\(currentEngine, storedPreferences\.voice/);
   assert.match(source, /request\.method === 'POST' && request\.url === '\/voice'/);
-  assert.match(source, /currentVoice = normalizeDaemonVoice\(body\.voice\)/);
-  assert.match(source, /currentVoice = normalizeDaemonVoice\(body\.voice \?\? currentVoice\)/);
-  assert.match(source, /voice: selectedDaemonVoice\(currentVoice\)/);
+  assert.match(source, /currentVoice = normalizeDaemonVoice\(currentEngine, body\.voice\)/);
+  assert.match(source, /currentVoice = normalizeDaemonVoice\(currentEngine, body\.voice \?\? currentVoice\)/);
+  assert.match(source, /voice: selectedDaemonVoice\(currentEngine, currentVoice\)/);
   assert.match(source, /function daemonVoiceLabel/);
   assert.match(source, /function selectedDaemonVoice/);
   assert.match(source, /currentPlayback\?\.pause\(\)/);
@@ -54,10 +55,10 @@ test('speech daemon does not open the old overlay controller', () => {
   assert.doesNotMatch(source, /currentController/);
 });
 
-test('speech daemon keeps Kokoro model workers out of idle memory', () => {
+test('speech daemon keeps local model workers out of idle memory', () => {
   assert.doesNotMatch(source, /warmKokoroWorkers/);
   assert.doesNotMatch(source, /createKokoroSynthesizerSession/);
-  assert.match(source, /createManagedKokoroSynthesizer\(home, \{ workers: 1 \}\)/);
+  assert.match(source, /createManagedSpeechSynthesizer\(home\)/);
   assert.match(source, /synthesizer\?\.dispose\(\)/);
 });
 
@@ -139,7 +140,7 @@ test('speech daemon shuts down through its scoped local endpoint', async () => {
 });
 
 test('speech daemon seeks from the live chunk and preserves job ownership', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-daemon-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-daemon-'));
   const text = Array.from({ length: 42 }, (_, index) => `Sentence ${index + 1} has enough useful detail to form several reading chunks.`).join(' ');
   const chunks = speechBatchesForMode(text, 'fast-start');
   const ranges = speechChunkRanges(text, chunks);

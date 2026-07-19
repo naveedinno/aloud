@@ -17,6 +17,8 @@ test('speak args default to stdin with browser disabled', () => {
     batch: true,
     controller: false,
     daemon: false,
+    engine: 'kokoro',
+    engineExplicit: false,
     help: false,
     mode: 'fast-start',
     modeExplicit: false,
@@ -37,6 +39,8 @@ test('speak args accept selected text options', () => {
     batch: true,
     controller: false,
     daemon: false,
+    engine: 'kokoro',
+    engineExplicit: false,
     help: false,
     mode: 'fast-start',
     modeExplicit: false,
@@ -90,7 +94,7 @@ test('speak args accept a bounded worker count', () => {
 });
 
 test('speakText auto mode keeps short text in fast-start batches', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-auto-short-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-auto-short-home-'));
   const events = [];
   try {
     await speakText({
@@ -101,7 +105,7 @@ test('speakText auto mode keeps short text in fast-start batches', async () => {
         events.push(`synth:${input.text}`);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
           path: join(home, `${input.text}.wav`),
           voice: 'af_heart',
@@ -124,7 +128,7 @@ test('speakText auto mode keeps short text in fast-start batches', async () => {
 });
 
 test('speakText auto mode streams long text in adaptive batches', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-auto-long-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-auto-long-home-'));
   const text = `${'Long sentence. '.repeat(80)}Done.`;
   const events = [];
   try {
@@ -136,7 +140,7 @@ test('speakText auto mode streams long text in adaptive batches', async () => {
         events.push(`synth:${input.text}`);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
           path: join(home, `${events.length}.wav`),
           voice: 'af_heart',
@@ -173,7 +177,7 @@ test('fast-start mode uses a smaller opening chunk than auto mode', () => {
 });
 
 test('smooth mode batches long selections instead of sending an unbounded Kokoro request', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-smooth-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-smooth-home-'));
   const events = [];
   const text = Array.from({ length: 16 }, (_, index) => `Sentence ${index + 1} ${'detail '.repeat(10)}.`).join(' ');
   try {
@@ -185,7 +189,7 @@ test('smooth mode batches long selections instead of sending an unbounded Kokoro
         events.push(`synth:${input.text}`);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
           path: join(home, `${input.text}.wav`),
           voice: 'af_heart',
@@ -286,7 +290,7 @@ test('speakText rejects empty selected text before synthesis', async () => {
 });
 
 test('speakText synthesizes selected text and plays the cached wav', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-speak-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-speak-home-'));
   const played = [];
   try {
     const result = await speakText({
@@ -303,9 +307,9 @@ test('speakText synthesizes selected text and plays the cached wav', async () =>
         });
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: 'b'.repeat(64),
-          path: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro', `${'b'.repeat(64)}.wav`),
+          path: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro', `${'b'.repeat(64)}.wav`),
           voice: 'af_heart',
           langCode: 'a',
           rate: 1.25,
@@ -325,7 +329,7 @@ test('speakText synthesizes selected text and plays the cached wav', async () =>
 });
 
 test('speakText prefetches the next sentence while the current sentence plays', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-batch-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-batch-home-'));
   const events = [];
   const progress = [];
   const first = `First ${'detail '.repeat(42)}.`;
@@ -341,7 +345,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
         events.push(`synth:${input.text}`);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
           path: join(home, `${input.text.startsWith('First') ? 'first' : 'second'}.wav`),
           voice: 'af_heart',
@@ -406,7 +410,7 @@ test('speakText prefetches the next sentence while the current sentence plays', 
 });
 
 test('speakText reads live playback rate when playing prefetched batches', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-dynamic-rate-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-dynamic-rate-home-'));
   const playbackRates = [];
   let currentRate = 0.8;
   const first = `First ${'detail '.repeat(42)}.`;
@@ -421,7 +425,7 @@ test('speakText reads live playback rate when playing prefetched batches', async
         assert.equal(input.rate, 1);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${input.text.startsWith('First') ? 1 : 2}`.repeat(64),
           path: join(home, `${input.text}.wav`),
           voice: 'af_heart',
@@ -442,7 +446,7 @@ test('speakText reads live playback rate when playing prefetched batches', async
 });
 
 test('speakText prefetches multiple future sentences before first playback', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kokoro-reader-prefetch-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'aloud-prefetch-home-'));
   const events = [];
   const sentences = ['One', 'Two', 'Three', 'Four'].map((label) => `${label} ${'detail '.repeat(50)}.`);
   try {
@@ -454,7 +458,7 @@ test('speakText prefetches multiple future sentences before first playback', asy
         events.push(`synth:${input.text}`);
         return {
           cached: false,
-          dir: join(home, 'Library', 'Application Support', 'Kokoro Reader', 'tts-cache', 'kokoro'),
+          dir: join(home, 'Library', 'Application Support', 'Aloud', 'tts-cache', 'kokoro'),
           id: `${events.length}`.repeat(64),
           path: join(home, `${input.text}.wav`),
           voice: 'af_heart',

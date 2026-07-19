@@ -13,6 +13,9 @@ test('reader starts in an honest connecting state and locks actions until reacha
   assert.match(html, /text\.readOnly = replacingLocked/);
   assert.match(html, /clearHistoryButton\.disabled = replacingLocked/);
   assert.match(html, /button\.disabled = replacingLocked/);
+  assert.match(html, /data-engine/);
+  assert.match(html, /Pocket TTS voices/);
+  assert.match(html, /syncEngineVoices\(engine\.value, next\.voice\)/);
 });
 
 test('reader derives its active chunk locally and preserves keyboard focus', () => {
@@ -66,14 +69,39 @@ test('reader keeps controls usable when browser storage is unavailable', () => {
   assert.doesNotMatch(html, /(?<!window\.)localStorage\.(getItem|setItem|removeItem)/);
 });
 
+test('reader migrates drafts and history from the former product storage keys', () => {
+  const html = renderPage();
+  assert.match(html, /function migrateLegacyStorage\(\)/);
+  assert.match(html, /'kokoro-reader-text': TEXT_KEY/);
+  assert.match(html, /migrateLegacyStorage\(\);[\s\S]*text\.value = readStorage\(TEXT_KEY/);
+});
+
 test('narrow layouts keep playback controls visible from the start', () => {
   const html = renderPage();
   assert.match(html, /@media \(max-width: 620px\)[\s\S]+?\.player-shell \{[\s\S]+?position: fixed/);
   assert.match(html, /bottom: max\(8px, env\(safe-area-inset-bottom\)\)/);
 });
 
+test('narrow layouts keep recovery guidance visible above fixed playback controls', () => {
+  const html = renderPage();
+  assert.match(html, /\.status-message\.is-error \{[\s\S]*white-space: normal;[\s\S]*-webkit-line-clamp: 2;/);
+  assert.match(html, /\.control-rail \{ grid-template-columns: 1fr; padding-bottom: 164px; \}/);
+});
+
 test('essential empty-editor guidance meets the intended contrast treatment', () => {
   const html = renderPage();
   assert.match(html, /textarea::placeholder \{ color: #818b88; \}/);
   assert.doesNotMatch(html, /textarea::placeholder \{ color: #6f7775; \}/);
+});
+
+test('voice file export exposes progress, cancellation, recovery, and a streamed download', () => {
+  const html = renderPage();
+  assert.match(html, /data-export>Save voice file/);
+  assert.match(html, /Generates long recordings in parts, then joins them into one WAV/);
+  assert.match(html, /post\('\/api\/exports'/);
+  assert.match(html, /\/api\/exports\/.*\/cancel/);
+  assert.match(html, /EXPORT_KEY = 'aloud-current-export'/);
+  assert.match(html, /Reconnecting to voice file export/);
+  assert.match(html, /exportDownload\.click\(\)/);
+  assert.match(html, /aria-label="Voice file generation progress"/);
 });

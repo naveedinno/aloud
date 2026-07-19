@@ -3,12 +3,12 @@ set -euo pipefail
 
 NODE_BIN="${1:-}"
 CLI_PATH="${2:-}"
-PORT="${KOKORO_READER_DAEMON_PORT:-17878}"
-LSOF_BIN="${KOKORO_READER_LSOF_BIN:-/usr/sbin/lsof}"
-PS_BIN="${KOKORO_READER_PS_BIN:-/bin/ps}"
+PORT="${ALOUD_DAEMON_PORT:-17878}"
+LSOF_BIN="${ALOUD_LSOF_BIN:-/usr/sbin/lsof}"
+PS_BIN="${ALOUD_PS_BIN:-/bin/ps}"
 
 if [[ ! "$PORT" =~ ^[0-9]+$ || "$PORT" -lt 1024 || "$PORT" -gt 65535 ]]; then
-  echo "Invalid Kokoro Reader daemon port: $PORT" >&2
+  echo "Invalid Aloud daemon port: $PORT" >&2
   exit 1
 fi
 
@@ -32,6 +32,9 @@ is_owned_command() {
     *) return 1 ;;
   esac
   case "$command" in
+    *"/aloud/dist/cli.js daemon") return 0 ;;
+    *"/Application Support/Aloud/runtime/"*"/dist/cli.js daemon") return 0 ;;
+    *"/Aloud.app/Contents/Resources/app/dist/cli.js daemon") return 0 ;;
     *"/kokoro-reader/dist/cli.js daemon") return 0 ;;
     *"/Application Support/Kokoro Reader/runtime/"*"/dist/cli.js daemon") return 0 ;;
     *"/Kokoro Reader.app/Contents/Resources/app/dist/cli.js daemon") return 0 ;;
@@ -78,6 +81,6 @@ fi
 
 kill -KILL "$pid"
 if ! wait_until_free; then
-  echo "Verified Kokoro Reader daemon $pid did not release port $PORT." >&2
+  echo "Verified Aloud daemon $pid did not release port $PORT." >&2
   exit 1
 fi

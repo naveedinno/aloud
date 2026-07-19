@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_EXECUTABLE="$SOURCE_ROOT/dist/cli.js"
-SOURCE_NODE="${KOKORO_READER_NODE:-}"
+SOURCE_NODE="${ALOUD_NODE:-}"
 MODE="${1:-install}"
 
 if [[ "$MODE" != "install" && "$MODE" != "--payload-only" ]]; then
@@ -31,17 +31,17 @@ if [[ -z "$SOURCE_NODE" ]]; then
 fi
 
 if [[ -z "$SOURCE_NODE" || ! -x "$SOURCE_NODE" ]]; then
-  echo "Kokoro Reader could not find its bundled Node.js runtime." >&2
+  echo "Aloud could not find its bundled Node.js runtime." >&2
   exit 1
 fi
 
 if ! "$SOURCE_NODE" -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major >= 20 ? 0 : 1);'; then
-  echo "Kokoro Reader requires Node.js 20 or newer." >&2
+  echo "Aloud requires Node.js 20 or newer." >&2
   exit 1
 fi
 
 if [[ ! -f "$SOURCE_ROOT/package.json" || ! -f "$SOURCE_EXECUTABLE" ]]; then
-  echo "Kokoro Reader's runtime payload is incomplete at: $SOURCE_ROOT" >&2
+  echo "Aloud's runtime payload is incomplete at: $SOURCE_ROOT" >&2
   exit 1
 fi
 
@@ -52,16 +52,38 @@ if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 umask 077
-APP_SUPPORT="$HOME/Library/Application Support/Kokoro Reader"
+APP_SUPPORT="$HOME/Library/Application Support/Aloud"
+LEGACY_APP_SUPPORT="$HOME/Library/Application Support/Kokoro Reader"
 RUNTIME_ROOT="$APP_SUPPORT/runtime"
 RUNTIME_VERSION_DIR="$RUNTIME_ROOT/$PACKAGE_VERSION"
 RUNTIME_CURRENT="$RUNTIME_ROOT/current"
 LOGS_DIR="$APP_SUPPORT/logs"
 SERVICES_DIR="$HOME/Library/Services"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-DAEMON_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.daemon.plist"
-MENUBAR_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.menubar.plist"
-MENUBAR_EXECUTABLE="$HOME/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar"
+DAEMON_PLIST="$LAUNCH_AGENTS_DIR/local.aloud.daemon.plist"
+MENUBAR_PLIST="$LAUNCH_AGENTS_DIR/local.aloud.menubar.plist"
+MENUBAR_EXECUTABLE="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
+LEGACY_DAEMON_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.daemon.plist"
+LEGACY_MENUBAR_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.menubar.plist"
+
+migrate_legacy_install() {
+  launchctl bootout "gui/$(id -u)" "$LEGACY_MENUBAR_PLIST" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$(id -u)" "$LEGACY_DAEMON_PLIST" >/dev/null 2>&1 || true
+  launchctl remove "local.kokoro-reader.menubar" >/dev/null 2>&1 || true
+  launchctl remove "local.kokoro-reader.daemon" >/dev/null 2>&1 || true
+  rm -f "$LEGACY_MENUBAR_PLIST" "$LEGACY_DAEMON_PLIST"
+
+  if [[ -d "$LEGACY_APP_SUPPORT" && ! -e "$APP_SUPPORT" ]]; then
+    mv "$LEGACY_APP_SUPPORT" "$APP_SUPPORT"
+    echo "Migrated the existing local models, cache, preferences, and runtime to Aloud."
+  fi
+
+  rm -rf -- \
+    "$SERVICES_DIR/Read Aloud with Kokoro.workflow" \
+    "$SERVICES_DIR/Stop Kokoro Reader.workflow"
+}
+
+migrate_legacy_install
 
 SPEAKERS=(
   "Heart|af_heart"
@@ -100,10 +122,11 @@ compute_source_payload_manifest() {
     "$SOURCE_ROOT/package.json"
     "$SOURCE_ROOT/README.md"
     "$SOURCE_ROOT/requirements-kokoro-py312.lock.txt"
+    "$SOURCE_ROOT/requirements-pocket-py312.lock.txt"
     "$SOURCE_ROOT/scripts/install-macos-service.sh"
     "$SOURCE_ROOT/scripts/uninstall-macos-service.sh"
-    "$SOURCE_ROOT/scripts/setup-kokoro.sh"
-    "$SOURCE_ROOT/scripts/run-kokoro-reader.sh"
+    "$SOURCE_ROOT/scripts/setup-aloud.sh"
+    "$SOURCE_ROOT/scripts/run-aloud.sh"
     "$SOURCE_ROOT/scripts/stop-owned-daemon.sh"
   )
   {
@@ -133,7 +156,7 @@ SOURCE_PAYLOAD_ID="$(compute_source_payload_manifest | /usr/bin/shasum -a 256 | 
 if [[ -f "$SOURCE_ROOT/payload.sha256" ]]; then
   PACKAGED_PAYLOAD_ID="$(tr -d '[:space:]' < "$SOURCE_ROOT/payload.sha256")"
   if [[ ! "$PACKAGED_PAYLOAD_ID" =~ ^[0-9a-f]{64}$ || "$PACKAGED_PAYLOAD_ID" != "$SOURCE_PAYLOAD_ID" ]]; then
-    echo "Kokoro Reader's packaged payload identity does not match its files; refusing to install a damaged bundle." >&2
+    echo "Aloud's packaged payload identity does not match its files; refusing to install a damaged bundle." >&2
     exit 1
   fi
 fi
@@ -153,7 +176,7 @@ install_runtime_payload() {
     installed_payload_id="$(tr -d '[:space:]' < "$RUNTIME_VERSION_DIR/payload.sha256")"
   fi
 
-  if [[ ! -x "$RUNTIME_VERSION_DIR/node/bin/node" || ! -f "$RUNTIME_VERSION_DIR/dist/cli.js" || "$installed_payload_id" != "$SOURCE_PAYLOAD_ID" || "${KOKORO_READER_FORCE_PAYLOAD:-0}" == "1" ]]; then
+  if [[ ! -x "$RUNTIME_VERSION_DIR/node/bin/node" || ! -f "$RUNTIME_VERSION_DIR/dist/cli.js" || "$installed_payload_id" != "$SOURCE_PAYLOAD_ID" || "${ALOUD_FORCE_PAYLOAD:-0}" == "1" ]]; then
     local staging_dir="$RUNTIME_ROOT/.staging-$PACKAGE_VERSION-$$"
     local old_dir="$RUNTIME_ROOT/.old-$PACKAGE_VERSION-$$"
     rm -rf "$staging_dir"
@@ -167,7 +190,7 @@ install_runtime_payload() {
       /usr/bin/ditto "$SOURCE_ROOT/native" "$staging_dir/native"
     fi
 
-    for payload_file in package.json README.md requirements-kokoro-py312.lock.txt; do
+    for payload_file in package.json README.md requirements-kokoro-py312.lock.txt requirements-pocket-py312.lock.txt; do
       if [[ ! -f "$SOURCE_ROOT/$payload_file" ]]; then
         echo "Missing runtime payload file: $SOURCE_ROOT/$payload_file" >&2
         rm -rf "$staging_dir"
@@ -176,7 +199,7 @@ install_runtime_payload() {
       cp "$SOURCE_ROOT/$payload_file" "$staging_dir/$payload_file"
     done
 
-    for payload_script in install-macos-service.sh uninstall-macos-service.sh setup-kokoro.sh run-kokoro-reader.sh stop-owned-daemon.sh; do
+    for payload_script in install-macos-service.sh uninstall-macos-service.sh setup-aloud.sh run-aloud.sh stop-owned-daemon.sh; do
       if [[ ! -f "$SOURCE_ROOT/scripts/$payload_script" ]]; then
         echo "Missing runtime script: $SOURCE_ROOT/scripts/$payload_script" >&2
         rm -rf "$staging_dir"
@@ -221,7 +244,7 @@ install_runtime_payload() {
   mv -fh "$next_link" "$RUNTIME_CURRENT"
 
   if [[ ! -x "$RUNTIME_CURRENT/node/bin/node" || ! -f "$RUNTIME_CURRENT/dist/cli.js" ]]; then
-    echo "The stable Kokoro Reader runtime failed validation: $RUNTIME_CURRENT" >&2
+    echo "The stable Aloud runtime failed validation: $RUNTIME_CURRENT" >&2
     return 1
   fi
 }
@@ -245,15 +268,15 @@ launchctl bootout "gui/$(id -u)" "$DAEMON_PLIST" >/dev/null 2>&1 || true
 echo "Verified legacy-daemon handoff complete; replacing it with the managed LaunchAgent."
 
 mkdir -p "$(dirname "$MENUBAR_EXECUTABLE")"
-if [[ -x "$RUNTIME_CURRENT/native/KokoroReaderMenuBar" ]]; then
-  cp "$RUNTIME_CURRENT/native/KokoroReaderMenuBar" "$MENUBAR_EXECUTABLE"
+if [[ -x "$RUNTIME_CURRENT/native/AloudMenuBar" ]]; then
+  cp "$RUNTIME_CURRENT/native/AloudMenuBar" "$MENUBAR_EXECUTABLE"
   chmod 700 "$MENUBAR_EXECUTABLE"
 else
   HF_HOME="$HF_HOME" HF_HUB_OFFLINE=1 "$NODE_BIN" "$APP_EXECUTABLE" prepare-menubar >/dev/null 2>&1 || true
 fi
 
 if [[ ! -x "$MENUBAR_EXECUTABLE" ]]; then
-  echo "The Kokoro Reader menu bar helper could not be installed." >&2
+  echo "The Aloud menu bar helper could not be installed." >&2
   exit 1
 fi
 
@@ -291,7 +314,7 @@ install_daemon() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>local.kokoro-reader.daemon</string>
+  <string>local.aloud.daemon</string>
   <key>ProgramArguments</key>
   <array>
     <string>$node_xml</string>
@@ -326,8 +349,8 @@ install_daemon() {
 PLIST
   /usr/bin/plutil -lint "$DAEMON_PLIST" >/dev/null
   launchctl bootstrap "gui/$(id -u)" "$DAEMON_PLIST"
-  launchctl kickstart -k "gui/$(id -u)/local.kokoro-reader.daemon"
-  launchctl print "gui/$(id -u)/local.kokoro-reader.daemon" >/dev/null
+  launchctl kickstart -k "gui/$(id -u)/local.aloud.daemon"
+  launchctl print "gui/$(id -u)/local.aloud.daemon" >/dev/null
   echo "Installed and restarted the managed daemon: $DAEMON_PLIST"
 }
 
@@ -353,7 +376,7 @@ install_menubar() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>local.kokoro-reader.menubar</string>
+  <string>local.aloud.menubar</string>
   <key>ProgramArguments</key>
   <array>
     <string>$helper_xml</string>
@@ -386,8 +409,8 @@ install_menubar() {
 PLIST
   /usr/bin/plutil -lint "$MENUBAR_PLIST" >/dev/null
   launchctl bootstrap "gui/$(id -u)" "$MENUBAR_PLIST"
-  launchctl kickstart -k "gui/$(id -u)/local.kokoro-reader.menubar"
-  launchctl print "gui/$(id -u)/local.kokoro-reader.menubar" >/dev/null
+  launchctl kickstart -k "gui/$(id -u)/local.aloud.menubar"
+  launchctl print "gui/$(id -u)/local.aloud.menubar" >/dev/null
   echo "Installed: $MENUBAR_PLIST"
 }
 
@@ -417,7 +440,7 @@ install_workflow() {
   <key>CFBundleDevelopmentRegion</key>
   <string>en_US</string>
   <key>CFBundleIdentifier</key>
-  <string>local.kokoro-reader.$identifier_suffix</string>
+  <string>local.aloud.$identifier_suffix</string>
   <key>CFBundleName</key>
   <string>$service_name</string>
   <key>CFBundlePackageType</key>
@@ -623,8 +646,8 @@ mkdir -p "$SERVICES_DIR"
 
 install_daemon
 install_menubar
-install_workflow "Read Aloud with Kokoro" "read-aloud-with-kokoro" ""
-install_workflow "Stop Kokoro Reader" "stop-kokoro-reader" "" "$(stop_command)"
+install_workflow "Read Selection Aloud" "read-selection-aloud" ""
+install_workflow "Stop Aloud" "stop-aloud" "" "$(stop_command)"
 
 for item in "${SPEAKERS[@]}"; do
   IFS='|' read -r label voice <<< "$item"
@@ -636,7 +659,7 @@ for item in "${STYLES[@]}"; do
   install_workflow "Kokoro Style - $label" "style-$(slugify "$label")" "--rate $rate"
 done
 
-if [[ "${KOKORO_READER_SKIP_REGISTRATION:-0}" != "1" ]]; then
+if [[ "${ALOUD_SKIP_REGISTRATION:-0}" != "1" ]]; then
   LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   if [[ -x "$LSREGISTER" ]]; then
     # Refresh command: lsregister -r -domain local -domain system -domain user
@@ -655,6 +678,6 @@ for candidate in "$RUNTIME_ROOT"/*; do
   fi
 done
 
-echo "Installed Kokoro Reader $PACKAGE_VERSION using the stable runtime: $RUNTIME_CURRENT"
+echo "Installed Aloud $PACKAGE_VERSION using the stable runtime: $RUNTIME_CURRENT"
 echo "Logs: $LOGS_DIR"
-echo "Select text, right-click, then choose Services > Read Aloud with Kokoro, Kokoro Speaker - ..., or Kokoro Style - ..."
+echo "Select text, right-click, then choose Services > Read Selection Aloud, Kokoro Speaker - ..., or Kokoro Style - ..."

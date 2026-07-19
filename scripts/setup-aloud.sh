@@ -6,12 +6,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-APP_SUPPORT="$HOME/Library/Application Support/Kokoro Reader"
+APP_SUPPORT="$HOME/Library/Application Support/Aloud"
 VENV_DIR="$APP_SUPPORT/kokoro-venv"
 HF_HOME="$APP_SUPPORT/huggingface"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REQUIREMENTS_LOCK="$REPO_DIR/requirements-kokoro-py312.lock.txt"
+POCKET_REQUIREMENTS_LOCK="$REPO_DIR/requirements-pocket-py312.lock.txt"
 SETUP_MANIFEST="$APP_SUPPORT/setup-manifest.json"
 SETUP_MANIFEST_TEMP="$APP_SUPPORT/.setup-manifest-$$.json"
 PIP_VERSION="26.1.2"
@@ -41,12 +42,12 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "Kokoro Reader requires Python 3.12; no executable was found at: $PYTHON_BIN" >&2
+  echo "Aloud requires Python 3.12; no executable was found at: $PYTHON_BIN" >&2
   exit 1
 fi
 
 if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
-  echo "Kokoro Reader requires Python 3.12 exactly. Selected: $($PYTHON_BIN --version 2>&1)" >&2
+  echo "Aloud requires Python 3.12 exactly. Selected: $($PYTHON_BIN --version 2>&1)" >&2
   exit 1
 fi
 
@@ -56,6 +57,10 @@ fi
 
 if [[ ! -f "$REQUIREMENTS_LOCK" ]]; then
   echo "Missing locked Python requirements: $REQUIREMENTS_LOCK" >&2
+  exit 1
+fi
+if [[ ! -f "$POCKET_REQUIREMENTS_LOCK" ]]; then
+  echo "Missing locked Pocket TTS requirements: $POCKET_REQUIREMENTS_LOCK" >&2
   exit 1
 fi
 
@@ -107,17 +112,20 @@ fi
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check "pip==$PIP_VERSION"
 "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --requirement "$REQUIREMENTS_LOCK"
+"$VENV_DIR/bin/python" -m pip install --disable-pip-version-check --requirement "$POCKET_REQUIREMENTS_LOCK"
 "$VENV_DIR/bin/python" -m pip check
 
-export HF_HOME MODEL_REPO MODEL_REVISION REQUIREMENTS_LOCK SETUP_MANIFEST_TEMP
+export HF_HOME MODEL_REPO MODEL_REVISION REQUIREMENTS_LOCK POCKET_REQUIREMENTS_LOCK SETUP_MANIFEST_TEMP
 "$VENV_DIR/bin/python" <<'PY'
 import hashlib
+import importlib.metadata
 import json
 import os
 import sys
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
+from pocket_tts import TTSModel
 
 repo_id = os.environ["MODEL_REPO"]
 revision = os.environ["MODEL_REVISION"]
@@ -144,17 +152,33 @@ if missing:
 # at the verified commit, then production launchers run Hugging Face offline.
 refs_dir = snapshot.parent.parent / "refs"
 refs_dir.mkdir(parents=True, exist_ok=True)
-(refs_dir / "main").write_text(f"{revision}\n", encoding="utf-8")
+(refs_dir / "main").write_text(revision, encoding="utf-8")
+
+print("Caching Pocket TTS and its built-in English voices…")
+pocket_model = TTSModel.load_model(language="english")
+for voice in [
+    "alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles",
+    "cosette", "eponine", "eve", "fantine", "george", "jane", "javert",
+    "jean", "marius", "mary", "michael", "paul", "peter_yearsley",
+    "stuart_bell", "vera",
+]:
+    pocket_model.get_state_for_audio_prompt(voice)
+pocket_version = importlib.metadata.version("pocket-tts")
+if pocket_version != "2.1.0":
+    raise RuntimeError(f"Expected Pocket TTS 2.1.0, installed {pocket_version}")
 
 lock_path = Path(os.environ["REQUIREMENTS_LOCK"])
+pocket_lock_path = Path(os.environ["POCKET_REQUIREMENTS_LOCK"])
 manifest_path = Path(os.environ["SETUP_MANIFEST_TEMP"])
 manifest = {
     "modelRepository": repo_id,
     "modelRevision": revision,
+    "pocketRequirementsLockSha256": hashlib.sha256(pocket_lock_path.read_bytes()).hexdigest(),
+    "pocketTtsVersion": pocket_version,
     "pythonVersion": f"{sys.version_info.major}.{sys.version_info.minor}",
     "requiredModelFiles": required_files,
     "requirementsLockSha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "status": "complete",
 }
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -163,14 +187,14 @@ print(f"Pinned {repo_id} at {revision}")
 PY
 
 if ! mv -f "$SETUP_MANIFEST_TEMP" "$SETUP_MANIFEST"; then
-  echo "Could not publish Kokoro Reader's setup manifest: $SETUP_MANIFEST" >&2
+  echo "Could not publish Aloud's setup manifest: $SETUP_MANIFEST" >&2
   exit 1
 fi
 trap - EXIT
 rm -rf "$VENV_BACKUP"
 rm -f "$SETUP_MANIFEST_BACKUP"
 
-echo "Kokoro Reader Python environment is ready:"
+echo "Aloud Python environment is ready:"
 echo "$VENV_DIR"
 echo "Pinned model cache: $HF_HOME"
 echo "Setup manifest: $SETUP_MANIFEST"

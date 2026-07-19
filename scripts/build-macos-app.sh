@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_DIR/build"
-APP_NAME="Kokoro Reader"
+APP_NAME="Aloud"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -24,12 +24,12 @@ NOTARY_PROFILE="${MACOS_NOTARY_PROFILE:-}"
 NODE_ENTITLEMENTS="$REPO_DIR/packaging/macos/node.entitlements"
 
 if [[ -z "$NODE_SOURCE" || ! -x "$NODE_SOURCE" ]]; then
-  echo "Node.js 20 or newer is required to build Kokoro Reader.app." >&2
+  echo "Node.js 20 or newer is required to build Aloud.app." >&2
   exit 1
 fi
 
 if ! "$NODE_SOURCE" -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major >= 20 ? 0 : 1);'; then
-  echo "Node.js 20 or newer is required to build Kokoro Reader.app." >&2
+  echo "Node.js 20 or newer is required to build Aloud.app." >&2
   exit 1
 fi
 
@@ -142,7 +142,8 @@ mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR/dist" "$APP_RESOURCES_DIR/scripts" "$A
 cp "$REPO_DIR/package.json" "$APP_RESOURCES_DIR/package.json"
 cp "$REPO_DIR/README.md" "$APP_RESOURCES_DIR/README.md"
 cp "$REPO_DIR/requirements-kokoro-py312.lock.txt" "$APP_RESOURCES_DIR/requirements-kokoro-py312.lock.txt"
-for payload_script in install-macos-service.sh uninstall-macos-service.sh setup-kokoro.sh run-kokoro-reader.sh stop-owned-daemon.sh; do
+cp "$REPO_DIR/requirements-pocket-py312.lock.txt" "$APP_RESOURCES_DIR/requirements-pocket-py312.lock.txt"
+for payload_script in install-macos-service.sh uninstall-macos-service.sh setup-aloud.sh run-aloud.sh stop-owned-daemon.sh; do
   cp "$REPO_DIR/scripts/$payload_script" "$APP_RESOURCES_DIR/scripts/$payload_script"
 done
 cp "$NODE_SOURCE" "$RESOURCES_NODE_DIR/node"
@@ -151,8 +152,8 @@ printf '%s\n' "$NODE_VERSION" > "$RESOURCES_DIR/node/VERSION"
 chmod 755 "$APP_RESOURCES_DIR/scripts/"*.sh "$RESOURCES_NODE_DIR/node"
 
 HOME="$NATIVE_BUILD_HOME" "$NODE_SOURCE" "$REPO_DIR/dist/cli.js" prepare-menubar
-NATIVE_HELPER="$NATIVE_BUILD_HOME/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar"
-NATIVE_SOURCE="$NATIVE_BUILD_HOME/Library/Application Support/Kokoro Reader/menubar/KokoroReaderMenuBar.swift"
+NATIVE_HELPER="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
+NATIVE_SOURCE="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBar.swift"
 if [[ ! -x "$NATIVE_HELPER" || ! -f "$NATIVE_SOURCE" ]]; then
   echo "Failed to compile the native menu bar helper. Install the Xcode Command Line Tools and retry." >&2
   exit 1
@@ -164,8 +165,8 @@ if [[ " $HELPER_ARCHS " != *" $RUNTIME_ARCH "* ]]; then
   echo "Menu bar helper architectures [$HELPER_ARCHS] do not include $RUNTIME_ARCH." >&2
   exit 1
 fi
-cp "$NATIVE_HELPER" "$APP_RESOURCES_DIR/native/KokoroReaderMenuBar"
-chmod 755 "$APP_RESOURCES_DIR/native/KokoroReaderMenuBar"
+cp "$NATIVE_HELPER" "$APP_RESOURCES_DIR/native/AloudMenuBar"
+chmod 755 "$APP_RESOURCES_DIR/native/AloudMenuBar"
 rm -rf "$NATIVE_BUILD_HOME"
 
 printf '%s\n' "$RUNTIME_ARCH" > "$RESOURCES_DIR/runtime-architecture.txt"
@@ -179,13 +180,13 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en_US</string>
   <key>CFBundleDisplayName</key>
-  <string>Kokoro Reader</string>
+  <string>Aloud</string>
   <key>CFBundleExecutable</key>
-  <string>Kokoro Reader</string>
+  <string>Aloud</string>
   <key>CFBundleIdentifier</key>
-  <string>local.kokoro-reader.app</string>
+  <string>local.aloud.app</string>
   <key>CFBundleName</key>
-  <string>Kokoro Reader</string>
+  <string>Aloud</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -204,7 +205,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </plist>
 PLIST
 
-cat > "$MACOS_DIR/Kokoro Reader" <<'LAUNCHER'
+cat > "$MACOS_DIR/Aloud" <<'LAUNCHER'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -212,29 +213,29 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_RESOURCES_DIR="$APP_DIR/Resources/app"
 BUNDLED_NODE="$APP_DIR/Resources/node/bin/node"
 SOURCE_INSTALLER="$APP_RESOURCES_DIR/scripts/install-macos-service.sh"
-APP_SUPPORT="$HOME/Library/Application Support/Kokoro Reader"
+APP_SUPPORT="$HOME/Library/Application Support/Aloud"
 STABLE_RUNTIME="$APP_SUPPORT/runtime/current"
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 show_dialog() {
   /usr/bin/osascript <<'APPLESCRIPT'
-set messageText to "Choose what you want Kokoro Reader to do."
-set buttonsList to {"Setup Kokoro", "Install Services", "Open Reader"}
-button returned of (display dialog messageText with title "Kokoro Reader" buttons buttonsList default button "Open Reader")
+set messageText to "Choose what you want Aloud to do."
+set buttonsList to {"Setup Voices", "Install Services", "Open Reader"}
+button returned of (display dialog messageText with title "Aloud" buttons buttonsList default button "Open Reader")
 APPLESCRIPT
 }
 
 show_error() {
-  KOKORO_READER_ERROR="$1" /usr/bin/osascript <<'APPLESCRIPT'
-set errorText to system attribute "KOKORO_READER_ERROR"
-display dialog errorText with title "Kokoro Reader could not finish" buttons {"OK"} default button "OK" with icon caution
+  ALOUD_ERROR="$1" /usr/bin/osascript <<'APPLESCRIPT'
+set errorText to system attribute "ALOUD_ERROR"
+display dialog errorText with title "Aloud could not finish" buttons {"OK"} default button "OK" with icon caution
 APPLESCRIPT
 }
 
 open_terminal_command() {
-  KOKORO_READER_COMMAND="$1" /usr/bin/osascript <<'APPLESCRIPT'
-set commandText to system attribute "KOKORO_READER_COMMAND"
+  ALOUD_COMMAND="$1" /usr/bin/osascript <<'APPLESCRIPT'
+set commandText to system attribute "ALOUD_COMMAND"
 tell application "Terminal"
   activate
   do script commandText
@@ -244,18 +245,18 @@ APPLESCRIPT
 
 ensure_payload() {
   local output
-  if ! output="$(KOKORO_READER_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" --payload-only 2>&1)"; then
+  if ! output="$(ALOUD_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" --payload-only 2>&1)"; then
     show_error "$output"
     return 1
   fi
   if [[ ! -x "$STABLE_RUNTIME/node/bin/node" || ! -f "$STABLE_RUNTIME/dist/cli.js" ]]; then
-    show_error "The private Kokoro Reader runtime is incomplete. Reinstall the app and try again."
+    show_error "The private Aloud runtime is incomplete. Reinstall the app and try again."
     return 1
   fi
 }
 
 if [[ ! -x "$BUNDLED_NODE" ]]; then
-  show_error "This copy of Kokoro Reader is damaged because its bundled Node.js runtime is missing."
+  show_error "This copy of Aloud is damaged because its bundled Node.js runtime is missing."
   exit 1
 fi
 
@@ -274,23 +275,23 @@ case "$choice" in
     ;;
   "Install Services"|"install")
     install_output=""
-    if ! install_output="$(KOKORO_READER_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" 2>&1)"; then
+    if ! install_output="$(ALOUD_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" 2>&1)"; then
       show_error "$install_output"
       exit 1
     fi
-    /usr/bin/osascript -e 'display notification "Services, daemon, and menu bar helper installed." with title "Kokoro Reader"'
+    /usr/bin/osascript -e 'display notification "Services, daemon, and menu bar helper installed." with title "Aloud"'
     ;;
-  "Setup Kokoro"|"setup")
+  "Setup Voices"|"setup")
     ensure_payload
-    printf -v quoted_script '%q' "$STABLE_RUNTIME/scripts/setup-kokoro.sh"
-    open_terminal_command "bash $quoted_script; result=\$?; echo; if [ \$result -eq 0 ]; then echo 'Kokoro Reader setup finished.'; else echo 'Kokoro Reader setup failed.'; fi; exit \$result"
+    printf -v quoted_script '%q' "$STABLE_RUNTIME/scripts/setup-aloud.sh"
+    open_terminal_command "bash $quoted_script; result=\$?; echo; if [ \$result -eq 0 ]; then echo 'Aloud setup finished.'; else echo 'Aloud setup failed.'; fi; exit \$result"
     ;;
   *)
     exit 0
     ;;
 esac
 LAUNCHER
-chmod 755 "$MACOS_DIR/Kokoro Reader"
+chmod 755 "$MACOS_DIR/Aloud"
 
 /usr/bin/plutil -lint "$CONTENTS_DIR/Info.plist" >/dev/null
 
@@ -305,7 +306,7 @@ sign_component() {
 }
 
 sign_component "$RESOURCES_NODE_DIR/node" --entitlements "$NODE_ENTITLEMENTS"
-sign_component "$APP_RESOURCES_DIR/native/KokoroReaderMenuBar"
+sign_component "$APP_RESOURCES_DIR/native/AloudMenuBar"
 
 PAYLOAD_ID="$({
   find "$APP_RESOURCES_DIR" -type f -print | LC_ALL=C sort | while IFS= read -r payload_file; do
