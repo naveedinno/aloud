@@ -16,6 +16,10 @@ test('reader starts in an honest connecting state and locks actions until reacha
   assert.match(html, /data-engine/);
   assert.match(html, /Pocket TTS voices/);
   assert.match(html, /syncEngineVoices\(engine\.value, next\.voice\)/);
+  assert.match(html, /<title>Aloud<\/title>/);
+  assert.match(html, /class="brand-mark"[\s\S]*<svg viewBox="0 0 64 64"/);
+  assert.doesNotMatch(html, /class="brand-mark"[^>]*>K<\/span>/);
+  assert.match(html, /rel="icon" href="data:image\/svg\+xml/);
 });
 
 test('reader derives its active chunk locally and preserves keyboard focus', () => {

@@ -12,7 +12,10 @@ test('native menu bar helper exposes the expected controls', () => {
   assert.match(source, /enum MenuBarVisualState/);
   assert.match(source, /menuBarIcon\(state: MenuBarVisualState\)/);
   assert.match(source, /NSBezierPath/);
-  assert.match(source, /appendArc/);
+  assert.match(source, /NSPoint\(x: 3\.0, y: 7\.0\)/);
+  assert.match(source, /NSPoint\(x: 9\.0, y: 15\.0\)/);
+  assert.match(source, /NSPoint\(x: 15\.0, y: 11\.0\)/);
+  assert.doesNotMatch(source, /appendArc/);
   assert.doesNotMatch(source, /NSImage\(systemSymbolName:/);
   assert.doesNotMatch(source, /speaker\.wave/);
   assert.match(source, /button\.title = ""/);

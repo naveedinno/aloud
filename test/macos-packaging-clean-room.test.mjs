@@ -101,6 +101,7 @@ test('clean-room app, DMG, install, and uninstall keep paths stable and scoped',
     mkdirSync(join(fixture, 'assets'), { recursive: true });
     writeFileSync(join(fixture, 'dist', 'cli.js'), '// clean fixture\n');
     writeFileSync(join(fixture, 'assets', 'fixture.txt'), 'asset\n');
+    copyFileSync(join(repo, 'assets', 'Aloud.icns'), join(fixture, 'assets', 'Aloud.icns'));
     writeFileSync(join(fixture, 'README.md'), '# Fixture\n');
     writeFileSync(join(fixture, 'requirements-kokoro-py312.lock.txt'), 'kokoro==0.9.4\n');
     writeFileSync(join(fixture, 'requirements-pocket-py312.lock.txt'), 'pocket-tts==2.1.0\n');
@@ -235,6 +236,8 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'bin', 'node')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'LICENSE')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'native', 'AloudMenuBar')));
+    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'Aloud.icns')));
+    assert.match(readFileSync(join(app, 'Contents', 'Info.plist'), 'utf8'), /<key>CFBundleIconFile<\/key>[\s\S]*<string>Aloud<\/string>/);
     assert.equal(readFileSync(join(app, 'Contents', 'Resources', 'runtime-architecture.txt'), 'utf8').trim(), hostArch);
     assert.ok(!existsSync(join(app, 'Contents', 'Resources', 'app', 'dist', 'stale.js')));
     assert.ok(!existsSync(join(fixture, 'build', 'Aloud.zip')));

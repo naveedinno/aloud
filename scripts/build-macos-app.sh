@@ -139,6 +139,7 @@ mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR/dist" "$APP_RESOURCES_DIR/scripts" "$A
 
 /usr/bin/ditto "$REPO_DIR/dist" "$APP_RESOURCES_DIR/dist"
 /usr/bin/ditto "$REPO_DIR/assets" "$APP_RESOURCES_DIR/assets"
+cp "$REPO_DIR/assets/Aloud.icns" "$RESOURCES_DIR/Aloud.icns"
 cp "$REPO_DIR/package.json" "$APP_RESOURCES_DIR/package.json"
 cp "$REPO_DIR/README.md" "$APP_RESOURCES_DIR/README.md"
 cp "$REPO_DIR/requirements-kokoro-py312.lock.txt" "$APP_RESOURCES_DIR/requirements-kokoro-py312.lock.txt"
@@ -185,6 +186,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>Aloud</string>
   <key>CFBundleIdentifier</key>
   <string>local.aloud.app</string>
+  <key>CFBundleIconFile</key>
+  <string>Aloud</string>
   <key>CFBundleName</key>
   <string>Aloud</string>
   <key>CFBundlePackageType</key>

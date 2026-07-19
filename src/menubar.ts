@@ -638,30 +638,19 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         strokeColor.setStroke()
 
         let mark = NSBezierPath()
-        mark.lineWidth = 1.9
+        mark.lineWidth = 1.8
         mark.lineCapStyle = .round
-        mark.lineJoinStyle = .round
-        mark.move(to: NSPoint(x: 4.8, y: 4.2))
-        mark.line(to: NSPoint(x: 4.8, y: 13.8))
-        mark.move(to: NSPoint(x: 5.2, y: 9.0))
-        mark.line(to: NSPoint(x: 9.2, y: 13.2))
-        mark.move(to: NSPoint(x: 5.2, y: 9.0))
-        mark.line(to: NSPoint(x: 9.2, y: 4.8))
+        mark.move(to: NSPoint(x: 3.0, y: 7.0))
+        mark.line(to: NSPoint(x: 3.0, y: 11.0))
+        mark.move(to: NSPoint(x: 6.0, y: 5.0))
+        mark.line(to: NSPoint(x: 6.0, y: 13.0))
+        mark.move(to: NSPoint(x: 9.0, y: 3.0))
+        mark.line(to: NSPoint(x: 9.0, y: 15.0))
+        mark.move(to: NSPoint(x: 12.0, y: 5.0))
+        mark.line(to: NSPoint(x: 12.0, y: 13.0))
+        mark.move(to: NSPoint(x: 15.0, y: 7.0))
+        mark.line(to: NSPoint(x: 15.0, y: 11.0))
         mark.stroke()
-
-        let innerWave = NSBezierPath()
-        innerWave.lineWidth = 1.45
-        innerWave.lineCapStyle = .round
-        innerWave.appendArc(withCenter: NSPoint(x: 9.8, y: 9.0), radius: 3.2, startAngle: -42, endAngle: 42)
-        innerWave.stroke()
-
-        if state != .idle {
-            let outerWave = NSBezierPath()
-            outerWave.lineWidth = 1.25
-            outerWave.lineCapStyle = .round
-            outerWave.appendArc(withCenter: NSPoint(x: 9.8, y: 9.0), radius: 5.4, startAngle: -38, endAngle: 38)
-            outerWave.stroke()
-        }
 
         image.unlockFocus()
         image.isTemplate = state == .idle

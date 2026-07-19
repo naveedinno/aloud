@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Aloud app icon</title>
+  <desc id="desc">A geometric letter A emitting two sound waves.</desc>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2926"/>
+      <stop offset="1" stop-color="#0c1211"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a8f1e2"/>
+      <stop offset="1" stop-color="#62cdb9"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#surface)"/>
+  <rect x="76" y="76" width="872" height="872" rx="198" fill="none" stroke="#a8f1e2" stroke-opacity=".12" stroke-width="8"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M250 716 431 300c16-37 68-37 84 0l163 416M337 548h257" stroke="#e8fffa" stroke-width="62"/>
+    <path d="M670 407c74 54 74 156 0 210M738 326c132 101 132 271 0 372" stroke="url(#signal)" stroke-width="46"/>
+  </g>
+</svg>

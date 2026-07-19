@@ -39,6 +39,7 @@ export function renderPage(): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aloud</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%23131d1b'/%3E%3Cg fill='none' stroke='%237dd3c7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 49 25 15q3-7 6 0l14 34M17 35h22' stroke-width='5'/%3E%3Cpath d='M44 24q9 8 0 16M50 18q15 14 0 28' stroke-width='3.5'/%3E%3C/g%3E%3C/svg%3E">
   <style>
     @font-face {
       font-family: "Kokoro Manrope";
@@ -479,14 +480,13 @@ export function renderPage(): string {
       height: 38px;
       place-items: center;
       flex: 0 0 auto;
-      border: 1px solid #3a4e4b;
+      border: 1px solid rgba(125, 211, 199, 0.22);
       border-radius: 11px;
-      color: #10201d;
-      background: var(--mint);
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: -0.04em;
+      color: var(--mint);
+      background: linear-gradient(145deg, #1b2926, #101715);
+      box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 7px 20px rgba(0, 0, 0, 0.2);
     }
+    .brand-mark svg { width: 27px; height: 27px; overflow: visible; }
     h1 { margin: 0; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -0.025em; }
     .sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
     .connection {
@@ -839,7 +839,14 @@ export function renderPage(): string {
   <main class="app-shell" data-reader-app data-listening-desk>
     <header class="app-header">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">K</span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64" focusable="false">
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 49 25 15q3-7 6 0l14 34M17 35h22" stroke-width="5"/>
+              <path d="M44 24q9 8 0 16M50 18q15 14 0 28" stroke-width="3.5"/>
+            </g>
+          </svg>
+        </span>
         <div>
           <h1>Aloud</h1>
           <p class="sub">A private listening desk on your Mac.</p>

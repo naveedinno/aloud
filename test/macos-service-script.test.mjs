@@ -134,6 +134,9 @@ test('macOS app builder packages the complete bundled runtime', () => {
   assert.match(appBuilder, /run-aloud\.sh/);
   assert.match(appBuilder, /Resources\/node\/bin/);
   assert.match(appBuilder, /native\/AloudMenuBar/);
+  assert.match(appBuilder, /assets\/Aloud\.icns/);
+  assert.match(appBuilder, /<key>CFBundleIconFile<\/key>/);
+  assert.match(appBuilder, /<string>Aloud<\/string>/);
   assert.match(appBuilder, /NODE_LICENSE_FILE/);
   assert.match(appBuilder, /node\/LICENSE/);
   assert.match(appBuilder, /payload\.sha256/);
