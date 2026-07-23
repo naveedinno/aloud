@@ -52,10 +52,10 @@ test('system health recognizes a complete local Kokoro environment', () => {
     mkdirSync(join(home, 'Library', 'Services', 'Stop Aloud.workflow'), { recursive: true });
     mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
     mkdirSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar'), { recursive: true });
-    writeFileSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar'), 'binary');
+    writeFileSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBarCurrent'), 'binary');
     writeFileSync(join(home, 'Library', 'LaunchAgents', 'local.aloud.menubar.plist'), 'plist');
     writeFileSync(join(venv, 'bin', 'python'), 'python');
-    chmodSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar'), 0o755);
+    chmodSync(join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBarCurrent'), 0o755);
     chmodSync(join(venv, 'bin', 'python'), 0o755);
     assert.equal(kokoroEnvironmentReady(home), false, 'a partial venv without the setup manifest must not report ready');
 

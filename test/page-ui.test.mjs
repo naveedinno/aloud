@@ -64,6 +64,18 @@ test('reader polling pauses in the background and prevents overlapping requests'
   assert.match(html, /visibilitychange/);
 });
 
+test('reader makes audio generation and playback phases visibly distinct', () => {
+  const html = renderPage();
+  assert.match(html, /data-playback-phase-label>Ready/);
+  assert.match(html, /playerShell\.classList\.toggle\('is-generating', generating\)/);
+  assert.match(html, /playerShell\.classList\.toggle\('is-reading'/);
+  assert.match(html, /playerShell\.classList\.toggle\('is-paused'/);
+  assert.match(html, /playbackPhaseLabel\.textContent = next\.paused \? 'Paused'/);
+  assert.match(html, /\.player-shell\.is-generating \.progress-bar\{width:30%!important;animation:generation-flow/);
+  assert.match(html, /Preparing ' \+ String\(Math\.min\(total, Math\.max\(1, current \+ 1\)\)\)/);
+  assert.match(html, /prefers-reduced-motion: reduce/);
+});
+
 test('reader keeps controls usable when browser storage is unavailable', () => {
   const html = renderPage();
   assert.match(html, /function readStorage\(key, fallback\)/);

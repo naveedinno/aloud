@@ -294,7 +294,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             guard let data,
                   let status = try? JSONDecoder().decode(DaemonStatus.self, from: data),
                   status.ok == true,
-                  status.protocolVersion == 1,
+                  status.protocolVersion == 2,
                   status.service == "aloud-speech-daemon" else {
                 DispatchQueue.main.async {
                     self.pollInFlight = false
@@ -717,8 +717,8 @@ export function nativeMenuBarPaths(home = homedir()): { dir: string; executable:
   const dir = join(aloudSupportDir(home), 'menubar');
   return {
     dir,
-    executable: join(dir, 'AloudMenuBar'),
-    source: join(dir, 'AloudMenuBar.swift'),
+    executable: join(dir, 'AloudMenuBarCurrent'),
+    source: join(dir, 'AloudMenuBarCurrent.swift'),
   };
 }
 

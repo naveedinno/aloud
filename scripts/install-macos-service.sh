@@ -62,7 +62,7 @@ SERVICES_DIR="$HOME/Library/Services"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 DAEMON_PLIST="$LAUNCH_AGENTS_DIR/local.aloud.daemon.plist"
 MENUBAR_PLIST="$LAUNCH_AGENTS_DIR/local.aloud.menubar.plist"
-MENUBAR_EXECUTABLE="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
+MENUBAR_EXECUTABLE="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent"
 LEGACY_DAEMON_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.daemon.plist"
 LEGACY_MENUBAR_PLIST="$LAUNCH_AGENTS_DIR/local.kokoro-reader.menubar.plist"
 
@@ -268,8 +268,8 @@ launchctl bootout "gui/$(id -u)" "$DAEMON_PLIST" >/dev/null 2>&1 || true
 echo "Verified legacy-daemon handoff complete; replacing it with the managed LaunchAgent."
 
 mkdir -p "$(dirname "$MENUBAR_EXECUTABLE")"
-if [[ -x "$RUNTIME_CURRENT/native/AloudMenuBar" ]]; then
-  cp "$RUNTIME_CURRENT/native/AloudMenuBar" "$MENUBAR_EXECUTABLE"
+if [[ -x "$RUNTIME_CURRENT/native/AloudMenuBarCurrent" ]]; then
+  cp "$RUNTIME_CURRENT/native/AloudMenuBarCurrent" "$MENUBAR_EXECUTABLE"
   chmod 700 "$MENUBAR_EXECUTABLE"
 else
   HF_HOME="$HF_HOME" HF_HUB_OFFLINE=1 "$NODE_BIN" "$APP_EXECUTABLE" prepare-menubar >/dev/null 2>&1 || true

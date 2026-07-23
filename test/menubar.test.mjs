@@ -69,6 +69,7 @@ test('native menu bar helper talks to the lightweight daemon', () => {
   assert.match(source, /request\.timeoutInterval = 4/);
   assert.match(source, /\(200\.\.<300\)\.contains\(response\.statusCode\)/);
   assert.match(source, /body \?\? Data\("\{\}"\.utf8\)/);
+  assert.match(source, /status\.protocolVersion == 2/);
   assert.doesNotMatch(source, /withTimeInterval: 1\.5, repeats: true/);
 });
 
@@ -103,6 +104,6 @@ test('native menu bar helper reads clipboard text through the daemon', () => {
 
 test('native menu bar helper is stored under Aloud support files', () => {
   const paths = nativeMenuBarPaths('/tmp/kokoro-home');
-  assert.equal(paths.executable, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBar');
-  assert.equal(paths.source, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBar.swift');
+  assert.equal(paths.executable, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent');
+  assert.equal(paths.source, '/tmp/kokoro-home/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent.swift');
 });

@@ -19,6 +19,7 @@ import {
   engineVoiceOptions,
   normalizeEngineVoice,
   normalizeSpeechEngine,
+  recommendedKokoroWorkers,
   type SpeechEngine,
   type SpeechSynthesizer,
 } from './speech-engine.js';
@@ -41,11 +42,14 @@ const DAEMON_URL = `http://127.0.0.1:${SPEECH_DAEMON_PORT}`;
 const RANDOM_VOICE = 'random';
 const MAX_DAEMON_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_DAEMON_TEXT_CHARACTERS = 240_000;
+const MAX_DAEMON_BATCHES = 2_048;
 export const DAEMON_SERVICE = 'aloud-speech-daemon';
 export const DAEMON_PROTOCOL = 2;
+export const DAEMON_CAPABILITIES = ['explicit-batches', 'prefetch-playback'] as const;
 
 export interface SpeechDaemonRequest {
   batch?: boolean;
+  batches?: string[];
   engine?: SpeechEngine;
   mode?: SpeechMode;
   prefetch?: number;
@@ -61,6 +65,7 @@ export type SpeechDaemonState = SpeechControllerState & {
 
 export interface SpeechDaemonStatus {
   accessibilityTrusted?: boolean;
+  capabilities: Array<typeof DAEMON_CAPABILITIES[number]>;
   canGoNext: boolean;
   canGoPrevious: boolean;
   canReplay: boolean;
@@ -80,6 +85,7 @@ export interface SpeechDaemonStatus {
   state: SpeechDaemonState;
   voice: string;
   voiceLabel: string;
+  workers: number;
 }
 
 export interface SpeechDaemonSettings {
@@ -170,6 +176,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
     const currentIndex = Math.max(0, Math.min(Math.max(0, currentChunks.length - 1), currentChunkIndex));
     return {
       accessibilityTrusted,
+      capabilities: [...DAEMON_CAPABILITIES],
       canGoNext: currentChunks.length > 1 && currentIndex < currentChunks.length - 1,
       canGoPrevious: currentChunks.length > 1 && currentIndex > 0,
       canReplay: currentChunks.length > 0,
@@ -189,6 +196,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       state: currentState,
       voice: currentVoice,
       voiceLabel: daemonVoiceLabel(currentEngine, currentVoice),
+      workers: currentEngine === 'kokoro' ? recommendedKokoroWorkers() : 1,
     };
   };
 
@@ -203,16 +211,15 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
   };
 
   const pauseCurrent = () => {
-    if (!currentAbort) return;
+    if (!currentAbort || currentPaused) return;
     currentPaused = true;
     currentPlayback?.pause();
-    updateState({ message: 'Paused' });
   };
 
   const resumeCurrent = () => {
+    if (!currentAbort || !currentPaused) return;
     currentPaused = false;
     currentPlayback?.resume();
-    updateState({ message: currentAbort ? 'Reading selected text' : 'Ready' });
   };
 
   const startJob = (input: SpeechDaemonRequest, chunks: string[], startAt = 0, jobId: string = randomUUID()) => {
@@ -285,7 +292,12 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
       const requestError = daemonRequestError(request);
       if (requestError) return sendJson(response, { error: requestError.message, ok: false }, requestError.status);
       if (request.method === 'GET' && request.url === '/health') {
-        return sendJson(response, { ok: true, protocolVersion: DAEMON_PROTOCOL, service: DAEMON_SERVICE });
+        return sendJson(response, {
+          capabilities: [...DAEMON_CAPABILITIES],
+          ok: true,
+          protocolVersion: DAEMON_PROTOCOL,
+          service: DAEMON_SERVICE,
+        });
       }
       if (request.method === 'GET' && request.url === '/status') {
         return sendJson(response, statusBody());
@@ -338,7 +350,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
         await readJson<Record<string, never>>(request);
         return await serializeMutation(() => {
           stopCurrent();
-          return sendJson(response, { ok: true, stopped: true });
+          return sendJson(response, statusBody());
         });
       }
       if (request.method === 'POST' && request.url === '/shutdown') {
@@ -355,14 +367,14 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
         await readJson<Record<string, never>>(request);
         return await serializeMutation(() => {
           pauseCurrent();
-          return sendJson(response, { ok: true, paused: currentPaused });
+          return sendJson(response, statusBody());
         });
       }
       if (request.method === 'POST' && request.url === '/resume') {
         await readJson<Record<string, never>>(request);
         return await serializeMutation(() => {
           resumeCurrent();
-          return sendJson(response, { ok: true, paused: currentPaused });
+          return sendJson(response, statusBody());
         });
       }
       if (request.method === 'POST' && request.url === '/seek') {
@@ -402,7 +414,7 @@ export async function runSpeechDaemon(options: SpeechDaemonRunOptions = {}): Pro
           currentVoice = normalizeDaemonVoice(currentEngine, body.voice ?? currentVoice);
           currentShortcut = normalizeGlobalShortcut(currentShortcut);
           persistPreferences();
-          const chunks = body.batch === false ? [text] : speechBatchesForMode(text, currentMode);
+          const chunks = daemonSpeechBatches({ ...body, text }, currentMode);
           startJob({ ...body, text }, chunks, 0);
           return sendJson(response, statusBody());
         });
@@ -555,8 +567,12 @@ async function daemonHealthResponse(): Promise<unknown | undefined> {
 
 export function isSpeechDaemonHealth(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  const health = value as { ok?: boolean; protocolVersion?: number; service?: string };
-  return health.ok === true && health.protocolVersion === DAEMON_PROTOCOL && health.service === DAEMON_SERVICE;
+  const health = value as { capabilities?: unknown; ok?: boolean; protocolVersion?: number; service?: string };
+  return health.ok === true
+    && health.protocolVersion === DAEMON_PROTOCOL
+    && health.service === DAEMON_SERVICE
+    && Array.isArray(health.capabilities)
+    && health.capabilities.includes('explicit-batches');
 }
 
 function getJson(path: string): Promise<unknown> {
@@ -755,6 +771,27 @@ function selectedDaemonVoice(engine: SpeechEngine, voice?: string): string {
   if (voice !== RANDOM_VOICE) return normalizeEngineVoice(engine, voice);
   const voices = engineVoiceOptions(engine);
   return voices[Math.floor(Math.random() * voices.length)]?.id ?? normalizeEngineVoice(engine);
+}
+
+function daemonSpeechBatches(input: SpeechDaemonRequest, mode: SpeechMode): string[] {
+  if (input.batches === undefined) {
+    return input.batch === false ? [input.text] : speechBatchesForMode(input.text, mode);
+  }
+  if (!Array.isArray(input.batches) || input.batches.length === 0 || input.batches.length > MAX_DAEMON_BATCHES) {
+    throw new DaemonHttpError(400, `batches must contain between 1 and ${MAX_DAEMON_BATCHES} narration beats.`);
+  }
+  const batches = input.batches.map((batch) => typeof batch === 'string' ? batch.trim() : '');
+  if (batches.some((batch) => !batch)) {
+    throw new DaemonHttpError(400, 'Every narration beat must be a non-empty string.');
+  }
+  if (normalizedSpeechText(batches.join(' ')) !== normalizedSpeechText(input.text)) {
+    throw new DaemonHttpError(400, 'Narration beats must match the supplied text in reading order.');
+  }
+  return batches;
+}
+
+function normalizedSpeechText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function speechModeLabel(mode: SpeechMode): string {

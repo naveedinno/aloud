@@ -68,3 +68,55 @@ rl.on('line', (line) => {
     rmSync(home, { force: true, recursive: true });
   }
 });
+
+test('a closing Pocket worker cannot reject work owned by its replacement', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'aloud-pocket-restart-'));
+  const worker = join(home, 'fake-pocket-worker');
+  writeFileSync(worker, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+process.on('SIGTERM', () => {
+  setTimeout(() => {
+    process.removeAllListeners('SIGTERM');
+    process.kill(process.pid, 'SIGTERM');
+  }, 80);
+});
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  setTimeout(() => {
+    const wav = Buffer.alloc(46);
+    wav.write('RIFF', 0, 'ascii');
+    wav.writeUInt32LE(38, 4);
+    wav.write('WAVEfmt ', 8, 'ascii');
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(24000, 24);
+    wav.writeUInt32LE(48000, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write('data', 36, 'ascii');
+    wav.writeUInt32LE(2, 40);
+    fs.writeFileSync(request.out_path, wav);
+    process.stdout.write(JSON.stringify({ id: request.id, ok: true }) + '\\n');
+  }, 180);
+});
+`, { mode: 0o700 });
+  chmodSync(worker, 0o700);
+  const synthesizer = createManagedPocketSynthesizer(home, { command: worker, idleMs: 5_000 });
+  try {
+    const abort = new AbortController();
+    const cancelled = synthesizer.synthesize({ text: 'Cancel the first worker.', voice: 'Alba' }, { signal: abort.signal });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    abort.abort();
+    await assert.rejects(cancelled, { name: 'AbortError' });
+
+    const replacement = await synthesizer.synthesize({ text: 'The replacement must survive.', voice: 'Anna' });
+    assert.equal(replacement.cached, false);
+    assert.equal(replacement.voice, 'anna');
+  } finally {
+    synthesizer.dispose();
+    rmSync(home, { force: true, recursive: true });
+  }
+});

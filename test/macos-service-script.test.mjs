@@ -35,6 +35,7 @@ test('macOS service installer persists only its stable private runtime', () => {
   assert.match(installer, /cp "\$SOURCE_NODE" "\$staging_dir\/node\/bin\/node"/);
   assert.match(installer, /APP_EXECUTABLE="\$RUNTIME_CURRENT\/dist\/cli\.js"/);
   assert.match(installer, /INSTALLER_PATH="\$RUNTIME_CURRENT\/scripts\/install-macos-service\.sh"/);
+  assert.match(installer, /MENUBAR_EXECUTABLE=.*AloudMenuBarCurrent/);
   assert.match(installer, /SOURCE_PAYLOAD_ID/);
   assert.match(installer, /payload\.sha256/);
   assert.match(installer, /installed_payload_id.*!=.*SOURCE_PAYLOAD_ID/);
@@ -133,15 +134,19 @@ test('macOS app builder packages the complete bundled runtime', () => {
   assert.match(appBuilder, /uninstall-macos-service\.sh/);
   assert.match(appBuilder, /run-aloud\.sh/);
   assert.match(appBuilder, /Resources\/node\/bin/);
-  assert.match(appBuilder, /native\/AloudMenuBar/);
+  assert.match(appBuilder, /native\/AloudMenuBarCurrent/);
   assert.match(appBuilder, /assets\/Aloud\.icns/);
   assert.match(appBuilder, /<key>CFBundleIconFile<\/key>/);
   assert.match(appBuilder, /<string>Aloud<\/string>/);
+  assert.match(appBuilder, /<key>LSUIElement<\/key>\s*<true\/>/);
   assert.match(appBuilder, /NODE_LICENSE_FILE/);
   assert.match(appBuilder, /node\/LICENSE/);
   assert.match(appBuilder, /payload\.sha256/);
   assert.match(appBuilder, /ensure_payload/);
   assert.match(appBuilder, /STABLE_RUNTIME="\$APP_SUPPORT\/runtime\/current"/);
+  assert.match(appBuilder, /choice="\$\{1:-activate\}"/);
+  assert.match(appBuilder, /launchctl kickstart "gui\/\$\(id -u\)\/local\.aloud\.menubar"/);
+  assert.doesNotMatch(appBuilder, /show_dialog/);
   assert.match(appBuilder, /exec "\$STABLE_RUNTIME\/node\/bin\/node"/);
   assert.doesNotMatch(appBuilder, /command -v node[^\n]+LAUNCHER/);
 });

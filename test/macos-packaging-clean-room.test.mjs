@@ -125,7 +125,7 @@ case "\${1:-}" in
   -p) printf '${version}\\n'; exit 0 ;;
 esac
 if [[ "\${2:-}" == "prepare-menubar" ]]; then
-  helper="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
+  helper="$HOME/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent"
   mkdir -p "$(dirname "$helper")"
   printf '#!/usr/bin/env bash\\nexit 0\\n' > "$helper"
   printf 'import Foundation\\nprint("fixture")\\n' > "$helper.swift"
@@ -235,9 +235,15 @@ chmod 600 "$SETUP_MANIFEST_TEMP"
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'requirements-pocket-py312.lock.txt')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'bin', 'node')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'node', 'LICENSE')));
-    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'native', 'AloudMenuBar')));
+    assert.ok(existsSync(join(app, 'Contents', 'Resources', 'app', 'native', 'AloudMenuBarCurrent')));
     assert.ok(existsSync(join(app, 'Contents', 'Resources', 'Aloud.icns')));
-    assert.match(readFileSync(join(app, 'Contents', 'Info.plist'), 'utf8'), /<key>CFBundleIconFile<\/key>[\s\S]*<string>Aloud<\/string>/);
+    const infoPlist = readFileSync(join(app, 'Contents', 'Info.plist'), 'utf8');
+    assert.match(infoPlist, /<key>CFBundleIconFile<\/key>[\s\S]*<string>Aloud<\/string>/);
+    assert.match(infoPlist, /<key>LSUIElement<\/key>\s*<true\/>/);
+    const appLauncher = readFileSync(join(app, 'Contents', 'MacOS', 'Aloud'), 'utf8');
+    assert.match(appLauncher, /choice="\$\{1:-activate\}"/);
+    assert.match(appLauncher, /launchctl kickstart "gui\/\$\(id -u\)\/local\.aloud\.menubar"/);
+    assert.doesNotMatch(appLauncher, /show_dialog/);
     assert.equal(readFileSync(join(app, 'Contents', 'Resources', 'runtime-architecture.txt'), 'utf8').trim(), hostArch);
     assert.ok(!existsSync(join(app, 'Contents', 'Resources', 'app', 'dist', 'stale.js')));
     assert.ok(!existsSync(join(fixture, 'build', 'Aloud.zip')));

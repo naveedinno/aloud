@@ -742,12 +742,14 @@ export function renderPage(): string {
     .stop-button { height: 46px; border-radius: 10px; padding: 0 14px; }
     .transport-status { min-width: 0; }
     .status-line { margin-bottom: 7px; color: var(--muted); font-size: 11px; }
-    .status-message { overflow: hidden; color: #d6dcda; white-space: nowrap; text-overflow: ellipsis; }
+    .playback-phase{display:inline-flex;flex:none;align-items:center;gap:6px;color:#aeb8b5;font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}.playback-phase-dot{width:7px;height:7px;border-radius:999px;background:#6f7976;box-shadow:0 0 0 3px rgba(111,121,118,.12)}.player-shell.is-generating .playback-phase{color:var(--mint)}.player-shell.is-generating .playback-phase-dot{background:var(--mint);animation:phase-pulse 1.35s ease-in-out infinite}.player-shell.is-reading .playback-phase{color:var(--mint)}.player-shell.is-reading .playback-phase-dot{background:var(--mint);box-shadow:0 0 0 3px rgba(133,215,201,.13)}.player-shell.is-paused .playback-phase{color:#e2bd73}.player-shell.is-paused .playback-phase-dot{background:#e2bd73;box-shadow:0 0 0 3px rgba(226,189,115,.12)}
+    .status-message { flex:1;overflow: hidden; color: #d6dcda; white-space: nowrap; text-overflow: ellipsis; }
     .status-message.is-changing { animation: status-shift 220ms var(--ease-ui) both; }
     .status-message.is-error { color: #efaaaa; }
     .progress-track { height: 4px; background: #29302f; }
     .progress-bar { background: var(--mint); transition: none; }
     .player-shell.is-running .progress-bar { transition: width 420ms var(--ease-ui); }
+    .player-shell.is-generating .progress-bar{width:30%!important;animation:generation-flow 1.2s ease-in-out infinite}
     .chunk-actions { display: flex; gap: 6px; }
     .chunk-actions[hidden] { display: none; }
     .icon-button { width: 38px; height: 38px; border-radius: 9px; font-size: 17px; }
@@ -776,6 +778,8 @@ export function renderPage(): string {
       from { opacity: 0.3; transform: translateY(3px); }
       to { opacity: 1; transform: translateY(0); }
     }
+    @keyframes phase-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.48;transform:scale(.78)}}
+    @keyframes generation-flow{0%{transform:translateX(-120%)}100%{transform:translateX(350%)}}
     @keyframes details-reveal {
       from { opacity: 0; transform: translateY(-4px); }
       to { opacity: 1; transform: translateY(0); }
@@ -833,6 +837,7 @@ export function renderPage(): string {
       .chunk-actions { grid-column: 2; grid-row: 2; justify-content: flex-end; }
       .key-hint { display: none; }
     }
+    @media (prefers-reduced-motion: reduce){.player-shell.is-generating .playback-phase-dot,.player-shell.is-generating .progress-bar{animation:none}.player-shell.is-generating .progress-bar{width:20%!important}.status-message.is-changing{animation:none}}
   </style>
 </head>
 <body>
@@ -984,6 +989,7 @@ export function renderPage(): string {
       </div>
       <div class="transport-status">
         <div class="status-line">
+          <span class="playback-phase" data-playback-phase><span class="playback-phase-dot" aria-hidden="true"></span><span data-playback-phase-label>Ready</span></span>
           <span class="status-message" data-status role="status" aria-live="polite">Ready to read.</span>
           <span data-progress-label>—</span>
         </div>
@@ -1019,6 +1025,7 @@ export function renderPage(): string {
     var progress = document.querySelector('[data-progress]');
     var progressTrack = document.querySelector('[data-progress-track]');
     var progressLabel = document.querySelector('[data-progress-label]');
+    var playbackPhaseLabel = document.querySelector('[data-playback-phase-label]');
     var playerShell = document.querySelector('.player-shell');
     var documentPanel = document.querySelector('.document-panel');
     var readingView = document.querySelector('[data-reading-view]');
@@ -1416,7 +1423,15 @@ export function renderPage(): string {
       connection.classList.remove('is-connecting', 'is-ready', 'is-busy', 'is-error');
       connection.classList.add(next.running ? 'is-busy' : 'is-ready');
       playerShell.classList.toggle('is-running', !!next.running);
-      connectionLabel.textContent = next.running ? (next.paused ? 'Paused' : 'Reading') : 'Local · Ready';
+      var state = next.state || {};
+      var phase = next.paused ? 'paused' : String(state.status || (next.running ? 'starting' : 'ready'));
+      var generating = next.running && (phase === 'starting' || phase === 'generating');
+      playerShell.classList.toggle('is-generating', generating);
+      playerShell.classList.toggle('is-reading', next.running && !next.paused && phase === 'reading');
+      playerShell.classList.toggle('is-paused', !!next.paused);
+      playerShell.setAttribute('data-playback-phase', phase);
+      if(playbackPhaseLabel) playbackPhaseLabel.textContent = next.paused ? 'Paused' : (generating ? 'Generating' : (phase === 'reading' ? 'Reading' : 'Ready'));
+      connectionLabel.textContent = next.running ? (next.paused ? 'Paused' : (generating ? 'Generating' : 'Reading')) : 'Local · Ready';
       connection.setAttribute('aria-label', 'Reader status: ' + connectionLabel.textContent);
       if(document.activeElement !== engine) engine.value = next.engine || 'kokoro';
       if(document.activeElement !== voice && document.activeElement !== engine) syncEngineVoices(engine.value, next.voice);
@@ -1428,7 +1443,6 @@ export function renderPage(): string {
         button.setAttribute('aria-pressed', Math.abs(Number(button.getAttribute('data-rate')) - Number(next.rate || 1)) < 0.02 ? 'true' : 'false');
       });
 
-      var state = next.state || {};
       if(!next.running && wasRunning){
         playbackEndedAt = Date.now();
         setLocalStatus(state.message || 'Finished reading.', state.status === 'error', 3200);
@@ -1458,7 +1472,9 @@ export function renderPage(): string {
         ? 'Reading chunk ' + String(Math.max(1, current)) + ' of ' + String(total)
         : (showingCompletion ? 'Reading complete' : 'Ready'));
       progressLabel.textContent = next.running || showingCompletion
-        ? (total > 1 ? String(Math.max(1, current)) + ' / ' + String(total) : next.voiceLabel + ' · ' + next.rate + '×')
+        ? (generating && total > 1
+          ? 'Preparing ' + String(Math.min(total, Math.max(1, current + 1))) + ' / ' + String(total)
+          : (total > 1 ? String(Math.max(1, current)) + ' / ' + String(total) : next.voiceLabel + ' · ' + next.rate + '×'))
         : '—';
 
       renderReadingHighlight(next, state);

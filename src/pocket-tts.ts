@@ -377,10 +377,18 @@ class PocketWorker {
     child.stderr.on('data', (chunk: string) => {
       this.stderr = `${this.stderr}${chunk}`.slice(-16_384);
     });
-    child.on('error', (error) => this.failAll(pocketUnavailable(error.message)));
-    child.on('close', (code) => {
-      if (this.child === child) this.child = undefined;
-      if (this.pending.size) this.failAll(pocketUnavailable(this.stderr.trim() || `Worker exited with status ${code ?? 'unknown'}.`));
+    child.on('error', (error) => {
+      if (this.child !== child) return;
+      this.child = undefined;
+      this.failAll(pocketUnavailable(error.message));
+    });
+    child.on('close', (code, signal) => {
+      if (this.child !== child) return;
+      this.child = undefined;
+      const exitDetail = signal
+        ? `Worker exited after receiving ${signal}.`
+        : `Worker exited with status ${code ?? 'unknown'}.`;
+      if (this.pending.size) this.failAll(pocketUnavailable(this.stderr.trim() || exitDetail));
     });
     return child;
   }

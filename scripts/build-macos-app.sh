@@ -153,8 +153,8 @@ printf '%s\n' "$NODE_VERSION" > "$RESOURCES_DIR/node/VERSION"
 chmod 755 "$APP_RESOURCES_DIR/scripts/"*.sh "$RESOURCES_NODE_DIR/node"
 
 HOME="$NATIVE_BUILD_HOME" "$NODE_SOURCE" "$REPO_DIR/dist/cli.js" prepare-menubar
-NATIVE_HELPER="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBar"
-NATIVE_SOURCE="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBar.swift"
+NATIVE_HELPER="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent"
+NATIVE_SOURCE="$NATIVE_BUILD_HOME/Library/Application Support/Aloud/menubar/AloudMenuBarCurrent.swift"
 if [[ ! -x "$NATIVE_HELPER" || ! -f "$NATIVE_SOURCE" ]]; then
   echo "Failed to compile the native menu bar helper. Install the Xcode Command Line Tools and retry." >&2
   exit 1
@@ -166,8 +166,8 @@ if [[ " $HELPER_ARCHS " != *" $RUNTIME_ARCH "* ]]; then
   echo "Menu bar helper architectures [$HELPER_ARCHS] do not include $RUNTIME_ARCH." >&2
   exit 1
 fi
-cp "$NATIVE_HELPER" "$APP_RESOURCES_DIR/native/AloudMenuBar"
-chmod 755 "$APP_RESOURCES_DIR/native/AloudMenuBar"
+cp "$NATIVE_HELPER" "$APP_RESOURCES_DIR/native/AloudMenuBarCurrent"
+chmod 755 "$APP_RESOURCES_DIR/native/AloudMenuBarCurrent"
 rm -rf "$NATIVE_BUILD_HOME"
 
 printf '%s\n' "$RUNTIME_ARCH" > "$RESOURCES_DIR/runtime-architecture.txt"
@@ -192,6 +192,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>Aloud</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>LSUIElement</key>
+  <true/>
   <key>CFBundleShortVersionString</key>
   <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
@@ -220,14 +222,6 @@ APP_SUPPORT="$HOME/Library/Application Support/Aloud"
 STABLE_RUNTIME="$APP_SUPPORT/runtime/current"
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-
-show_dialog() {
-  /usr/bin/osascript <<'APPLESCRIPT'
-set messageText to "Choose what you want Aloud to do."
-set buttonsList to {"Setup Voices", "Install Services", "Open Reader"}
-button returned of (display dialog messageText with title "Aloud" buttons buttonsList default button "Open Reader")
-APPLESCRIPT
-}
 
 show_error() {
   ALOUD_ERROR="$1" /usr/bin/osascript <<'APPLESCRIPT'
@@ -258,17 +252,50 @@ ensure_payload() {
   fi
 }
 
+install_services() {
+  local install_output=""
+  if ! install_output="$(ALOUD_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" 2>&1)"; then
+    show_error "$install_output"
+    return 1
+  fi
+}
+
+activate_menu_bar() {
+  local source_payload_id=""
+  local installed_payload_id=""
+  if [[ -f "$APP_RESOURCES_DIR/payload.sha256" ]]; then
+    source_payload_id="$(<"$APP_RESOURCES_DIR/payload.sha256")"
+  fi
+  if [[ -f "$STABLE_RUNTIME/payload.sha256" ]]; then
+    installed_payload_id="$(<"$STABLE_RUNTIME/payload.sha256")"
+  fi
+
+  ensure_payload
+
+  if [[ -z "$source_payload_id" || "$installed_payload_id" != "$source_payload_id" ]] ||
+     ! /bin/launchctl print "gui/$(id -u)/local.aloud.daemon" >/dev/null 2>&1 ||
+     ! /bin/launchctl print "gui/$(id -u)/local.aloud.menubar" >/dev/null 2>&1; then
+    install_services
+    return
+  fi
+
+  if ! /bin/launchctl kickstart "gui/$(id -u)/local.aloud.daemon" >/dev/null 2>&1 ||
+     ! /bin/launchctl kickstart "gui/$(id -u)/local.aloud.menubar" >/dev/null 2>&1; then
+    install_services
+  fi
+}
+
 if [[ ! -x "$BUNDLED_NODE" ]]; then
   show_error "This copy of Aloud is damaged because its bundled Node.js runtime is missing."
   exit 1
 fi
 
-choice="${1:-}"
-if [[ -z "$choice" ]]; then
-  choice="$(show_dialog)"
-fi
+choice="${1:-activate}"
 
 case "$choice" in
+  "activate")
+    activate_menu_bar
+    ;;
   "Open Reader"|"open")
     ensure_payload
     export HF_HOME="$APP_SUPPORT/huggingface"
@@ -277,11 +304,7 @@ case "$choice" in
     exec "$STABLE_RUNTIME/node/bin/node" "$STABLE_RUNTIME/dist/cli.js"
     ;;
   "Install Services"|"install")
-    install_output=""
-    if ! install_output="$(ALOUD_NODE="$BUNDLED_NODE" "$SOURCE_INSTALLER" 2>&1)"; then
-      show_error "$install_output"
-      exit 1
-    fi
+    install_services
     /usr/bin/osascript -e 'display notification "Services, daemon, and menu bar helper installed." with title "Aloud"'
     ;;
   "Setup Voices"|"setup")
@@ -309,7 +332,7 @@ sign_component() {
 }
 
 sign_component "$RESOURCES_NODE_DIR/node" --entitlements "$NODE_ENTITLEMENTS"
-sign_component "$APP_RESOURCES_DIR/native/AloudMenuBar"
+sign_component "$APP_RESOURCES_DIR/native/AloudMenuBarCurrent"
 
 PAYLOAD_ID="$({
   find "$APP_RESOURCES_DIR" -type f -print | LC_ALL=C sort | while IFS= read -r payload_file; do

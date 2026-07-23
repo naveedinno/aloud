@@ -69,7 +69,7 @@ export function readerSystemHealth(
 ): ReaderSystemHealth {
   const servicesDir = join(home, 'Library', 'Services');
   const launchAgentsDir = join(home, 'Library', 'LaunchAgents');
-  const menuBarExecutable = join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBar');
+  const menuBarExecutable = join(home, 'Library', 'Application Support', 'Aloud', 'menubar', 'AloudMenuBarCurrent');
   const isMac = process.platform === 'darwin';
   const servicesReady = isMac
     && existsSync(join(servicesDir, 'Read Selection Aloud.workflow'))

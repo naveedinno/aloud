@@ -1,3 +1,4 @@
+import { cpus, totalmem } from 'node:os';
 import {
   createManagedKokoroSynthesizer,
   kokoroVoiceLabel,
@@ -58,8 +59,15 @@ export function engineVoiceOptions(engine: SpeechEngine): Array<{ id: string; la
   return engine === 'pocket' ? pocketVoiceOptions() : kokoroVoiceOptions();
 }
 
+export function recommendedKokoroWorkers(
+  memoryBytes = totalmem(),
+  logicalCores = cpus().length,
+): number {
+  return memoryBytes >= 16 * 1024 ** 3 && logicalCores >= 8 ? 2 : 1;
+}
+
 export function createManagedSpeechSynthesizer(home: string): ManagedSpeechSynthesizer {
-  const kokoro = createManagedKokoroSynthesizer(home, { workers: 1 });
+  const kokoro = createManagedKokoroSynthesizer(home, { workers: recommendedKokoroWorkers() });
   const pocket = createManagedPocketSynthesizer(home);
   return {
     async synthesize(_home, input, options = {}) {
